@@ -125,10 +125,6 @@ html.is-compact .back-link {
   font-size: 13px;
 }
 
-html.is-compact .lookup-more {
-  min-height: 36px;
-}
-
 html.is-compact .notebook-heading {
   flex: 1;
   text-align: right;

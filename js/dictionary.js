@@ -1,4 +1,4 @@
-/** 本地詞典查詢。讀音來自 JMdict，中文與語源來自維基詞典。不呼叫翻譯 API。 */
+/** 本地詞典只提供讀音與外來語語源。中文翻譯不從這裡讀取。 */
 
 const BUCKETS = 16;
 const cache = new Map();
@@ -76,7 +76,7 @@ async function loadBucket(index) {
 
 /**
  * 找不到時回傳 null。
- * translation 只在維基詞典有中文對譯時才有值。
+ * 中文翻譯不使用這裡的譯文。
  */
 export async function lookupDictionary(text) {
   const key = compactKey(text);

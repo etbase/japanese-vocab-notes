@@ -2,6 +2,7 @@
 
 import { getCurrentUser, usingDemoMode } from './auth.js';
 import { lookupDictionary } from './dictionary.js';
+import { needsChinese, translateJapanese } from './translate.js';
 import {
   COVER_COLORS,
   closeLineMenus,
@@ -62,8 +63,9 @@ let closeModal = () => {};
 let rendering = false;
 const lineTimers = new Map();
 const glossTimers = new Map();
-const lookupTimers = new Map();
 let statusTimer = 0;
+let translationQueue = Promise.resolve();
+let batchRunning = false;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -221,27 +223,15 @@ function saveSlotNow(slot, kanji, hiragana, { lookup = false } = {}) {
     : storedList[slot];
   if (id && !stored) return;
   if (!stored && !nextKanji && !nextReading) return;
-  const notebook = currentNotebook();
   if (stored && stored.kanji === nextKanji && stored.hiragana === nextReading) {
-    if (
-      lookup
-      && nextKanji
-      && notebook?.autoLookup !== false
-      && !stored.glossStale
-      && stored.lookupKey !== nextKanji
-    ) scheduleLookup(stored.id, nextKanji);
+    if (lookup && nextKanji) assistWord(stored.id, nextKanji);
     return;
   }
   const headChanged = Boolean(stored) && stored.kanji !== nextKanji;
   const readingChanged = Boolean(stored) && stored.hiragana !== nextReading;
-  const hasGloss = Boolean(String(stored?.translation || '').trim() || String(stored?.originWord || '').trim());
   const patch = { kanji: nextKanji, hiragana: nextReading };
   if (readingChanged) patch.readingEdited = true;
   if (headChanged && !readingChanged && stored && !stored.readingEdited) patch.hiragana = '';
-  if (headChanged && hasGloss) {
-    patch.glossStale = true;
-    patch.lookupKey = '';
-  }
   if (id) updateWord(id, patch);
   else ensureWordAt(state.notebookId, slot, patch);
   if (patch.hiragana === '') {
@@ -252,13 +242,7 @@ function saveSlotNow(slot, kanji, hiragana, { lookup = false } = {}) {
   refreshNotebookChrome();
   const wordId = id || document.querySelector(`[data-slot="${slot}"]`)?.dataset.wordId || '';
   const word = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
-  if (headChanged && hasGloss) {
-    if (!rendering) render();
-    return;
-  }
-  if (!lookup || !word || !nextKanji || notebook?.autoLookup === false || word.glossStale) return;
-  if (word.lookupKey === nextKanji) return;
-  scheduleLookup(word.id, nextKanji);
+  if (lookup && word && nextKanji) assistWord(word.id, nextKanji);
 }
 
 function scheduleLineSave(slot, kanji, hiragana) {
@@ -329,99 +313,82 @@ function flushGlossEdits() {
   });
 }
 
-function scheduleLookup(wordId, head) {
-  clearTimeout(lookupTimers.get(wordId));
-  lookupTimers.set(wordId, setTimeout(() => {
-    lookupTimers.delete(wordId);
-    applyLookup(wordId, head, false);
-  }, 40));
+function enqueueTranslation(task) {
+  const run = translationQueue.then(task, task);
+  translationQueue = run.then(() => {}, () => {});
+  return run;
 }
 
-async function applyLookup(wordId, head, force) {
+function assistWord(wordId, head) {
+  fillReading(wordId, head);
+  enqueueTranslation(() => translateWord(wordId, head));
+}
+
+async function fillReading(wordId, head) {
   const notebook = currentNotebook();
   const word = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
   const key = String(head || word?.kanji || '').trim();
-  if (!notebook || !word || !key) return;
-  if (!force && (notebook.autoLookup === false || word.glossStale || word.lookupKey === key)) return;
-  const result = await lookupDictionary(key);
-  if (result?.unavailable) {
-    flashStatus('辞書を読み込めなかったため、翻訳できません。');
-    return;
+  if (!notebook || !word || word.kanji !== key) return;
+  let result = null;
+  try {
+    result = await lookupDictionary(key);
+  } catch {
+    result = null;
   }
+  if (result?.unavailable) return;
   const latest = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
   if (!latest || latest.kanji !== key) return;
-  const line = document.querySelector(`[data-word-id="${CSS.escape(wordId)}"]`);
-  const pendingValue = (field) => {
-    const input = line?.querySelector(`[data-field="${field}"]`);
-    return input instanceof HTMLInputElement ? input.value.trim() : null;
-  };
-  const pendingTranslation = pendingValue('translation');
-  const pendingOrigin = pendingValue('origin');
-  const translationDirty = pendingTranslation !== null && pendingTranslation !== (latest.translation || '');
-  const originDirty = pendingOrigin !== null && pendingOrigin !== (latest.originWord || '');
-  const patch = { lookupKey: key };
-  if (force) patch.glossStale = false;
+  const patch = {};
   if (
     result?.reading
     && isHiragana(result.reading)
     && notebook.type !== 'katakana'
-    && (force ? !latest.readingEdited : !latest.hiragana.trim())
+    && !latest.readingEdited
+    && !latest.hiragana.trim()
   ) {
     patch.hiragana = result.reading;
   }
-  if (result?.originWord && (force || (!latest.originEdited && !originDirty))) {
-    patch.originWord = result.originWord;
+  const origin = String(result?.originWord || '').trim();
+  if (
+    origin
+    && /[A-Za-z\u00C0-\u024F]/u.test(origin)
+    && !latest.originEdited
+    && !String(latest.originWord || '').trim()
+  ) {
+    patch.originWord = origin;
     patch.originLanguage = result.originLanguage || '';
-    if (force) patch.originEdited = false;
   }
-  if (result?.translation && (force || (!latest.translationEdited && !translationDirty))) {
-    patch.translation = result.translation;
-    if (force) patch.translationEdited = false;
-  }
+  if (!Object.keys(patch).length) return;
   await updateWord(wordId, patch);
   const saved = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
   if (saved) syncPaperLine(saved);
-  if (!force) return;
-  const live = document.querySelector('#live-status');
-  if (live) {
-    const filled = [
-      patch.hiragana ? '読み' : '',
-      patch.originWord ? '語源' : '',
-      patch.translation ? '訳' : '',
-    ].filter(Boolean);
-    live.textContent = filled.length
-      ? `辞書から${filled.join('と')}を入れました`
-      : '辞書には見当たりませんでした';
-  }
-  if (!rendering) render();
 }
 
-function keepGloss(slot) {
-  const line = document.querySelector(`[data-slot="${slot}"]`);
-  const id = line?.dataset.wordId || '';
-  const word = getWordsByNotebook(state.notebookId).find((item) => item.id === id);
-  if (!word) return;
-  updateWord(word.id, {
-    glossStale: false,
-    translationEdited: Boolean(String(word.translation || '').trim()) || word.translationEdited,
-    originEdited: Boolean(String(word.originWord || '').trim()) || word.originEdited,
-    lookupKey: word.kanji,
-  });
-  render();
+async function translateWord(wordId, head) {
+  const word = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
+  const key = String(head || word?.kanji || '').trim();
+  if (!word || word.kanji !== key || !needsChinese(word)) return { ok: false, reason: 'skip' };
+  const pending = pendingField(wordId, 'translation');
+  if (pending !== null && pending !== String(word.translation || '').trim()) return { ok: false, reason: 'skip' };
+  const result = await translateJapanese(key);
+  const latest = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
+  if (!latest || latest.kanji !== key || !needsChinese(latest)) return { ok: false, reason: 'skip' };
+  if (!result.ok) return result;
+  await updateWord(wordId, { translation: result.text, translationEdited: false });
+  const line = document.querySelector(`[data-word-id="${CSS.escape(wordId)}"]`);
+  const input = line?.querySelector('[data-field="translation"]');
+  if (input instanceof HTMLInputElement && !input.value.trim()) delete input.dataset.dirty;
+  const saved = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
+  if (saved) syncPaperLine(saved);
+  return { ok: true };
 }
 
-async function relookupLine(slot) {
-  flushLineEdits();
-  flushGlossEdits();
-  const line = document.querySelector(`[data-slot="${slot}"]`);
-  const id = line?.dataset.wordId || '';
-  const word = getWordsByNotebook(state.notebookId).find((item) => item.id === id);
-  if (!word?.kanji.trim()) {
-    const live = document.querySelector('#live-status');
-    if (live) live.textContent = '単語を書いてから検索できます';
-    return;
-  }
-  await applyLookup(word.id, word.kanji, true);
+function pendingField(wordId, field) {
+  const line = document.querySelector(`[data-word-id="${CSS.escape(wordId)}"]`);
+  const input = line?.querySelector(`[data-field="${field}"]`);
+  if (!(input instanceof HTMLInputElement)) return null;
+  if (input.dataset.dirty === 'true') return input.value.trim();
+  return null;
 }
 
 function toggleTranslation() {
@@ -433,16 +400,7 @@ function toggleTranslation() {
   render();
 }
 
-function toggleLookup() {
-  const notebook = currentNotebook();
-  if (!notebook) return;
-  const next = notebook.autoLookup === false;
-  updateNotebook(notebook.id, { autoLookup: next });
-  render();
-  flashStatus(next ? '自動翻訳をオンにしました' : '自動翻訳をオフにしました');
-}
-
-function flashStatus(message) {
+function flashStatus(message, { sticky = false, duration = 3200 } = {}) {
   const live = document.querySelector('#live-status');
   if (live) live.textContent = message;
   const slot = document.querySelector('#tool-status');
@@ -450,63 +408,53 @@ function flashStatus(message) {
   slot.hidden = false;
   slot.textContent = message;
   clearTimeout(statusTimer);
+  if (sticky) return;
   statusTimer = setTimeout(() => {
-    slot.hidden = true;
-    slot.textContent = '';
-  }, 2800);
+    if (slot.textContent === message) {
+      slot.hidden = true;
+      slot.textContent = '';
+    }
+  }, duration);
 }
 
-async function lookupMissing() {
+async function translateMissing() {
+  if (batchRunning) return;
   flushLineEdits();
   flushGlossEdits();
   const notebook = currentNotebook();
   if (!notebook) return;
-  const targets = getWordsByNotebook(state.notebookId).filter((word) => (
-    String(word.kanji || '').trim()
-    && !String(word.translation || '').trim()
-    && !word.translationEdited
-  ));
+  const words = getWordsByNotebook(state.notebookId);
+  const skipped = words.filter((word) => String(word.kanji || '').trim() && !needsChinese(word)).length;
+  const targets = words.filter(needsChinese);
   if (!targets.length) {
-    flashStatus('未翻訳の単語はありません。');
+    flashStatus(skipped ? `未翻訳の単語はありません。\n${skipped}語はスキップしました。` : '未翻訳の単語はありません。');
     return;
   }
-  let found = 0;
-  let missing = 0;
-  for (const word of targets) {
-    const result = await lookupDictionary(word.kanji);
-    if (result?.unavailable) {
-      if (!rendering) render();
-      flashStatus('辞書を読み込めなかったため、翻訳できません。');
-      return;
+  batchRunning = true;
+  let success = 0;
+  let failed = 0;
+  let quota = false;
+  try {
+    for (let index = 0; index < targets.length; index += 1) {
+      flashStatus(`翻訳中 ${index + 1}/${targets.length}`, { sticky: true });
+      const outcome = await enqueueTranslation(() => translateWord(targets[index].id, targets[index].kanji));
+      if (outcome?.reason === 'quota') {
+        quota = true;
+        break;
+      }
+      if (outcome?.ok) success += 1;
+      else if (outcome?.reason !== 'skip') failed += 1;
     }
-    const latest = getWordsByNotebook(state.notebookId).find((item) => item.id === word.id);
-    if (!latest || latest.translationEdited || String(latest.translation || '').trim()) continue;
-    if (!result?.translation) {
-      missing += 1;
-      await updateWord(word.id, { lookupKey: latest.kanji });
-      continue;
-    }
-    const patch = { lookupKey: latest.kanji, translation: result.translation };
-    if (
-      result.reading
-      && isHiragana(result.reading)
-      && notebook.type !== 'katakana'
-      && !latest.readingEdited
-      && !latest.hiragana.trim()
-    ) {
-      patch.hiragana = result.reading;
-    }
-    if (result.originWord && !latest.originEdited && !String(latest.originWord || '').trim()) {
-      patch.originWord = result.originWord;
-      patch.originLanguage = result.originLanguage || '';
-    }
-    await updateWord(word.id, patch);
-    found += 1;
+  } finally {
+    batchRunning = false;
   }
-  getWordsByNotebook(state.notebookId).forEach((word) => syncPaperLine(word));
-  render();
-  const searched = found + missing;
-  flashStatus(`${searched}語を検索しました。\n${found}語の翻訳が見つかりました。\n${missing}語は見つかりませんでした。`);
+  const lines = [
+    `${success}語を翻訳しました。`,
+    `${failed}語は失敗しました。`,
+    `${skipped}語はスキップしました。`,
+  ];
+  if (quota) lines.push('本日の無料翻訳上限に達したため、残りの翻訳を停止しました。');
+  flashStatus(lines.join('\n'), { duration: 7000 });
 }
 
 function flushLineEdits() {
@@ -617,11 +565,8 @@ function render() {
           scheduleLineSave(slot, kanji, hiragana);
         },
         onEditGloss: ({ slot, field, value }) => scheduleGlossSave(slot, field, value),
-        onRelookup: relookupLine,
-        onKeepGloss: keepGloss,
         onToggleTranslation: toggleTranslation,
-        onToggleLookup: toggleLookup,
-        onLookupMissing: lookupMissing,
+        onTranslateMissing: translateMissing,
         onAdvance: advanceToSlot,
         onInsertLine: insertLine,
         onSaveNote: saveLineNote,
@@ -1106,10 +1051,6 @@ function openNotebookDialog(mode, notebook) {
     { value: 'kanji', label: '漢字ノート' },
     { value: 'katakana', label: 'カタカナノート' },
   ], notebook?.type === 'katakana' ? 'katakana' : 'kanji');
-  const lookupField = choiceField('auto-lookup', '自動翻訳', [
-    { value: 'on', label: 'ON' },
-    { value: 'off', label: 'OFF' },
-  ], notebook?.autoLookup === false ? 'off' : 'on');
 
   const actions = el('div', 'modal-actions');
   const cancel = el('button', 'btn btn-ghost', 'キャンセル');
@@ -1117,7 +1058,7 @@ function openNotebookDialog(mode, notebook) {
   const submit = el('button', 'btn btn-primary', mode === 'edit' ? '保存する' : 'つくる');
   submit.type = 'submit';
   actions.append(cancel, submit);
-  form.append(field, error, typeField, lookupField, colorField, actions);
+  form.append(field, error, typeField, colorField, actions);
 
   let composing = false;
   input.addEventListener('compositionstart', () => {
@@ -1145,9 +1086,8 @@ function openNotebookDialog(mode, notebook) {
     }
     const color = form.querySelector('input[name="cover-color"]:checked')?.value || 'sage';
     const type = form.querySelector('input[name="notebook-type"]:checked')?.value === 'katakana' ? 'katakana' : 'kanji';
-    const autoLookup = form.querySelector('input[name="auto-lookup"]:checked')?.value !== 'off';
     submit.disabled = true;
-    const payload = { title: title.trim(), color, type, autoLookup };
+    const payload = { title: title.trim(), color, type };
     const result = mode === 'edit'
       ? await updateNotebook(notebook.id, payload)
       : await createNotebook({ ...payload, showTranslation: true });
@@ -1246,7 +1186,7 @@ function bindChrome() {
 function bindKeys() {
   document.addEventListener('pointerdown', (event) => {
     const target = event.target;
-    if (target instanceof Element && target.closest('.row-more, .row-popover, .lookup-more, .lookup-popover, .note-popover, .note-dot, .note-tip')) return;
+    if (target instanceof Element && target.closest('.row-more, .row-popover, .note-popover, .note-dot, .note-tip')) return;
     closeLineMenus();
   });
   window.addEventListener('pagehide', () => {

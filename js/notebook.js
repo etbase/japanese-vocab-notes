@@ -230,21 +230,9 @@ export function renderNotebook(container, options) {
     translation.type = 'button';
     translation.setAttribute('aria-pressed', notebook.showTranslation === false ? 'false' : 'true');
     translation.addEventListener('click', () => options.onToggleTranslation?.());
-    const lookupWrap = el('div', 'lookup-control');
-    const lookup = el('button', notebook.autoLookup === false ? 'btn btn-auto' : 'btn btn-auto is-on', '自動翻訳');
-    lookup.type = 'button';
-    lookup.setAttribute('aria-pressed', notebook.autoLookup === false ? 'false' : 'true');
-    lookup.addEventListener('click', () => options.onToggleLookup?.());
-    const lookupMore = el('button', 'lookup-more', '▾');
-    lookupMore.type = 'button';
-    lookupMore.setAttribute('aria-label', '翻訳の操作');
-    lookupMore.setAttribute('aria-haspopup', 'menu');
-    lookupMore.setAttribute('aria-expanded', 'false');
-    lookupMore.addEventListener('click', (event) => {
-      event.stopPropagation();
-      toggleLookupMenu(lookupMore, options.onLookupMissing);
-    });
-    lookupWrap.append(lookup, lookupMore);
+    const translate = el('button', 'btn btn-ghost', '自動翻訳');
+    translate.type = 'button';
+    translate.addEventListener('click', () => options.onTranslateMissing?.());
     const practice = el('button', 'btn btn-ghost', '練習する');
     practice.type = 'button';
     practice.addEventListener('click', onStartPractice);
@@ -254,7 +242,7 @@ export function renderNotebook(container, options) {
     const status = el('p', 'tool-status');
     status.id = 'tool-status';
     status.hidden = true;
-    tools.append(translation, lookupWrap, practice, focus, status);
+    tools.append(translation, translate, practice, focus, status);
   }
 
   const book = el('div', 'book');
@@ -284,8 +272,6 @@ export function renderNotebook(container, options) {
         onDeleteWord,
         onEditLine,
         onEditGloss: options.onEditGloss,
-        onRelookup: options.onRelookup,
-        onKeepGloss: options.onKeepGloss,
         onAdvance,
         onInsertLine,
         onSaveNote,
@@ -388,7 +374,6 @@ function renderPage(options) {
     } else {
       line.classList.add('is-editable');
       if (notebook?.type === 'katakana') line.classList.add('is-katakana');
-      if (word?.glossStale) line.dataset.glossStale = 'true';
       if (word && (word.kanji || word.hiragana)) line.classList.add('has-word');
       line.dataset.slot = String(slot);
       if (word?.id) line.dataset.wordId = word.id;
@@ -608,21 +593,6 @@ function focusNextField(input, slot) {
     return true;
   }
   return false;
-}
-
-function toggleLookupMenu(button, onLookupMissing) {
-  const open = button.getAttribute('aria-expanded') === 'true';
-  closeLineMenus();
-  if (open) return;
-  button.setAttribute('aria-expanded', 'true');
-  const menu = el('div', 'row-popover lookup-popover');
-  menu.setAttribute('role', 'menu');
-  menu.append(menuButton('未翻訳の単語を検索', () => onLookupMissing?.()));
-  document.body.append(menu);
-  const rect = button.getBoundingClientRect();
-  const width = menu.getBoundingClientRect().width || 220;
-  menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 80)}px`;
-  menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
 }
 
 export function syncPaperLine(word) {
@@ -854,12 +824,7 @@ function toggleRowMenu(button, slot, options) {
   const remove = menuButton('この行を削除', () => options.onDeleteWord?.(slot));
   const insert = menuButton('下に行を追加', () => options.onInsertLine?.(slot));
   const note = menuButton('メモを編集', () => openNotePopover(button, slot, options));
-  const again = menuButton('翻訳を再検索', () => options.onRelookup?.(slot));
-  menu.append(remove, insert, note, again);
-  const line = document.querySelector(`[data-slot="${slot}"]`);
-  if (line?.dataset.glossStale === 'true') {
-    menu.append(menuButton('このまま', () => options.onKeepGloss?.(slot)));
-  }
+  menu.append(remove, insert, note);
   document.body.append(menu);
   const rect = button.getBoundingClientRect();
   const width = 196;
@@ -885,7 +850,7 @@ export function closeLineMenus() {
     node.remove();
   });
   document.querySelectorAll('.row-popover, .lookup-popover, .note-tip').forEach((node) => node.remove());
-  document.querySelectorAll('.row-more[aria-expanded="true"], .lookup-more[aria-expanded="true"]').forEach((button) => {
+  document.querySelectorAll('.row-more[aria-expanded="true"]').forEach((button) => {
     button.setAttribute('aria-expanded', 'false');
   });
   document.querySelectorAll('.note-dot.is-pinned').forEach((dot) => dot.classList.remove('is-pinned'));
