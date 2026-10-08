@@ -61,6 +61,10 @@ html.is-compact .notebook-tools {
   margin: 0 0 6px;
 }
 
+html.is-compact .is-pen-mode .notebook-tools {
+  margin-top: 40px;
+}
+
 html.is-compact .notebook-tools .btn {
   min-height: 36px;
   padding: 0 12px;
