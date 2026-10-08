@@ -29,12 +29,15 @@ html.is-compact .page-number {
   padding-left: 0;
 }
 
-html.is-compact .word-line,
-html.is-compact .word-line.is-katakana {
-  grid-template-columns: minmax(0, 1.05fr) minmax(3.2em, 0.8fr) minmax(0, 1fr) auto;
+html.is-compact .word-line {
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) minmax(3.2em, 0.8fr) auto;
   column-gap: 4px;
   padding-right: 0;
   padding-left: 0;
+}
+
+html.is-compact .word-line.is-katakana {
+  grid-template-columns: minmax(0, 1.05fr) minmax(3.2em, 0.8fr) minmax(3.2em, 0.8fr) auto;
 }
 
 html.is-compact .word-line.is-study {
@@ -111,9 +114,19 @@ html.is-compact .notebook-toolbar {
   margin-bottom: 8px;
 }
 
-html.is-compact .notebook-toolbar .btn {
+html.is-compact .notebook-toolbar .btn,
+html.is-compact .back-link {
   align-self: center;
   flex: none;
+}
+
+html.is-compact .back-link {
+  min-height: 36px;
+  font-size: 13px;
+}
+
+html.is-compact .lookup-more {
+  min-height: 36px;
 }
 
 html.is-compact .notebook-heading {
@@ -153,9 +166,12 @@ html.is-compact .pager .btn {
     width: min(1120px, calc(100% - 20px));
   }
 
-  .word-line,
+  .word-line {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr) minmax(2.8em, 0.75fr) auto;
+  }
+
   .word-line.is-katakana {
-    grid-template-columns: minmax(0, 1fr) minmax(2.8em, 0.75fr) minmax(0, 0.95fr) auto;
+    grid-template-columns: minmax(0, 1fr) minmax(2.8em, 0.75fr) minmax(2.8em, 0.75fr) auto;
   }
 
   .word-kanji,

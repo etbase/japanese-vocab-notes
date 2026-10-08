@@ -60,13 +60,15 @@ async function loadBucket(index) {
   if (loading.has(index)) return loading.get(index);
   const name = `b${String(index).padStart(2, '0')}.json`;
   const pending = fetch(new URL(`../data/dict/${name}`, import.meta.url))
-    .then((response) => (response.ok ? response.json() : {}))
-    .catch(() => ({}))
-    .then((data) => {
-      const bucket = data && typeof data === 'object' ? data : {};
-      cache.set(index, bucket);
+    .then(async (response) => {
+      if (!response.ok) throw new Error('dictionary');
+      const data = await response.json();
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('dictionary');
+      cache.set(index, data);
+      return data;
+    })
+    .finally(() => {
       loading.delete(index);
-      return bucket;
     });
   loading.set(index, pending);
   return pending;
@@ -79,7 +81,12 @@ async function loadBucket(index) {
 export async function lookupDictionary(text) {
   const key = compactKey(text);
   if (!key || key.length > 18) return null;
-  const bucket = await loadBucket(bucketFor(key));
+  let bucket;
+  try {
+    bucket = await loadBucket(bucketFor(key));
+  } catch {
+    return { unavailable: true };
+  }
   const row = bucket[key];
   if (!Array.isArray(row)) return null;
   const reading = String(row[0] || '');

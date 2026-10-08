@@ -227,6 +227,7 @@ main {
   font-size: 14px;
   line-height: 1;
   white-space: nowrap;
+  text-decoration: none;
   cursor: pointer;
   touch-action: manipulation;
 }
@@ -243,6 +244,15 @@ main {
 .btn-ghost {
   border: 1px solid var(--milk);
   background: transparent;
+}
+
+.btn-ghost:hover,
+.btn-ghost:focus,
+.btn-ghost:active,
+.btn:hover,
+.btn:focus,
+.btn:active {
+  text-decoration: none;
 }
 
 .btn-ghost:hover {

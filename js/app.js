@@ -64,6 +64,7 @@ let rendering = false;
 const lineTimers = new Map();
 const glossTimers = new Map();
 const lookupTimers = new Map();
+let statusTimer = 0;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -181,7 +182,8 @@ function refreshNotebookChrome() {
   const words = getWordsByNotebook(state.notebookId);
   const stats = notebookStats(words);
   const summary = document.querySelector('.notebook-summary');
-  if (summary) summary.textContent = `${stats.total}語 · 覚えた ${stats.percent}%`;
+  const kind = currentNotebook()?.type === 'katakana' ? 'カタカナ' : '漢字';
+  if (summary) summary.textContent = `${stats.total}語・${kind}`;
   const view = spreadFor(state.page, pageLimitFor(words), { compact: isCompact() });
   const prev = document.querySelector('[data-pager="prev"]');
   const next = document.querySelector('[data-pager="next"]');
@@ -284,6 +286,7 @@ function saveGlossNow(slot, field, value) {
   const stored = id
     ? getWordsByNotebook(state.notebookId).find((word) => word.id === id)
     : null;
+  if (id && !stored) return;
   if (field === 'origin') {
     if ((stored?.originWord || '') === text) {
       clearGlossDirty(slot, field, text);
@@ -342,6 +345,10 @@ async function applyLookup(wordId, head, force) {
   if (!notebook || !word || !key) return;
   if (!force && (notebook.autoLookup === false || word.glossStale || word.lookupKey === key)) return;
   const result = await lookupDictionary(key);
+  if (result?.unavailable) {
+    flashStatus('辞書を読み込めなかったため、翻訳できません。');
+    return;
+  }
   const latest = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
   if (!latest || latest.kanji !== key) return;
   const line = document.querySelector(`[data-word-id="${CSS.escape(wordId)}"]`);
@@ -430,8 +437,77 @@ function toggleTranslation() {
 function toggleLookup() {
   const notebook = currentNotebook();
   if (!notebook) return;
-  updateNotebook(notebook.id, { autoLookup: notebook.autoLookup === false });
+  const next = notebook.autoLookup === false;
+  updateNotebook(notebook.id, { autoLookup: next });
   render();
+  flashStatus(next ? '自動翻訳をオンにしました' : '自動翻訳をオフにしました');
+}
+
+function flashStatus(message) {
+  const live = document.querySelector('#live-status');
+  if (live) live.textContent = message;
+  const slot = document.querySelector('#tool-status');
+  if (!slot) return;
+  slot.hidden = false;
+  slot.textContent = message;
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => {
+    slot.hidden = true;
+    slot.textContent = '';
+  }, 2800);
+}
+
+async function lookupMissing() {
+  flushLineEdits();
+  flushGlossEdits();
+  const notebook = currentNotebook();
+  if (!notebook) return;
+  const targets = getWordsByNotebook(state.notebookId).filter((word) => (
+    String(word.kanji || '').trim()
+    && !String(word.translation || '').trim()
+    && !word.translationEdited
+  ));
+  if (!targets.length) {
+    flashStatus('未翻訳の単語はありません。');
+    return;
+  }
+  let found = 0;
+  let missing = 0;
+  for (const word of targets) {
+    const result = await lookupDictionary(word.kanji);
+    if (result?.unavailable) {
+      if (!rendering) render();
+      flashStatus('辞書を読み込めなかったため、翻訳できません。');
+      return;
+    }
+    const latest = getWordsByNotebook(state.notebookId).find((item) => item.id === word.id);
+    if (!latest || latest.translationEdited || String(latest.translation || '').trim()) continue;
+    if (!result?.translation) {
+      missing += 1;
+      await updateWord(word.id, { lookupKey: latest.kanji });
+      continue;
+    }
+    const patch = { lookupKey: latest.kanji, translation: result.translation };
+    if (
+      result.reading
+      && isHiragana(result.reading)
+      && notebook.type !== 'katakana'
+      && !latest.readingEdited
+      && !latest.hiragana.trim()
+    ) {
+      patch.hiragana = result.reading;
+    }
+    if (result.originWord && !latest.originEdited && !String(latest.originWord || '').trim()) {
+      patch.originWord = result.originWord;
+      patch.originLanguage = result.originLanguage || '';
+    }
+    await updateWord(word.id, patch);
+    found += 1;
+  }
+  getWordsByNotebook(state.notebookId).forEach((word) => syncPaperLine(word));
+  render();
+  const searched = found + missing;
+  flashStatus(`${searched}語を検索しました。\n${found}語の翻訳が見つかりました。\n${missing}語は見つかりませんでした。`);
 }
 
 function flushLineEdits() {
@@ -547,6 +623,7 @@ function render() {
         onKeepGloss: keepGloss,
         onToggleTranslation: toggleTranslation,
         onToggleLookup: toggleLookup,
+        onLookupMissing: lookupMissing,
         onAdvance: advanceToSlot,
         onInsertLine: insertLine,
         onSaveNote: saveLineNote,
@@ -802,6 +879,8 @@ function reviewWrong() {
 
 function syncFromHash() {
   closeModal({ restore: false });
+  flushLineEdits();
+  flushGlossEdits();
   const route = parseHash(location.hash);
   const nextId = route.view === 'notebook' ? route.notebookId : null;
   if (nextId !== state.notebookId) {
@@ -1034,7 +1113,7 @@ function openNotebookDialog(mode, notebook) {
     { value: 'kanji', label: '漢字ノート' },
     { value: 'katakana', label: 'カタカナノート' },
   ], notebook?.type === 'katakana' ? 'katakana' : 'kanji');
-  const lookupField = choiceField('auto-lookup', '自動検索', [
+  const lookupField = choiceField('auto-lookup', '自動翻訳', [
     { value: 'on', label: 'ON' },
     { value: 'off', label: 'OFF' },
   ], notebook?.autoLookup === false ? 'off' : 'on');
@@ -1174,7 +1253,7 @@ function bindChrome() {
 function bindKeys() {
   document.addEventListener('pointerdown', (event) => {
     const target = event.target;
-    if (target instanceof Element && target.closest('.row-more, .row-popover, .note-popover, .note-dot, .note-tip')) return;
+    if (target instanceof Element && target.closest('.row-more, .row-popover, .lookup-more, .lookup-popover, .note-popover, .note-dot, .note-tip')) return;
     closeLineMenus();
   });
   window.addEventListener('pagehide', () => {

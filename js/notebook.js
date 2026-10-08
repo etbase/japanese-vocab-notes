@@ -100,8 +100,14 @@ export function renderShelf(container, { notebooks, wordsByNotebook, onCreate, o
   container.replaceChildren(section);
 }
 
+function notebookLabel(notebook, words) {
+  const total = notebookStats(words).total;
+  const kind = notebook?.type === 'katakana' ? 'カタカナ' : '漢字';
+  return `${total}語・${kind}`;
+}
+
 function renderCover(notebook, words, { onEdit, onDelete, freshId }) {
-  const stats = notebookStats(words);
+  const label = notebookLabel(notebook, words);
   const card = el('article', 'notebook-card');
   if (freshId === notebook.id) card.classList.add('is-new');
   card.dataset.notebookId = notebook.id;
@@ -111,26 +117,14 @@ function renderCover(notebook, words, { onEdit, onDelete, freshId }) {
 
   const link = el('a', 'cover-open');
   link.href = `#/n/${encodeURIComponent(notebook.id)}/p/1`;
-  link.setAttribute(
-    'aria-label',
-    `${notebook.title}、${stats.total}語、覚えた${stats.percent}%。開く`,
-  );
+  link.setAttribute('aria-label', `${notebook.title}、${label}。開く`);
 
   const plate = el('div', 'cover-plate');
   const title = el('h3', 'cover-title hand', notebook.title);
   plate.append(title);
 
   const meta = el('div', 'cover-meta');
-  const metaRow = el('p', 'cover-stats');
-  metaRow.append(el('span', '', `${stats.total}語`));
-  metaRow.append(el('span', '', notebook.type === 'katakana' ? 'カタカナ' : '漢字'));
-  metaRow.append(el('span', '', `覚えた ${stats.percent}%`));
-  const progress = el('div', 'progress');
-  progress.setAttribute('aria-hidden', 'true');
-  const bar = el('span');
-  bar.style.width = `${stats.percent}%`;
-  progress.append(bar);
-  meta.append(metaRow, progress);
+  meta.append(el('p', 'cover-stats', label));
 
   link.append(plate, meta);
   cover.append(link);
@@ -201,7 +195,6 @@ export function renderNotebook(container, options) {
     onFocusCorrect,
     onFocusWrong,
   } = options;
-  const stats = notebookStats(totalWords || words);
   const studying = study?.kind === 'practice';
   const focusing = study?.kind === 'focus';
   const view = spreadFor(page, pageLimit || pageCount(words), { compact });
@@ -209,14 +202,14 @@ export function renderNotebook(container, options) {
 
   const screen = el('section', 'notebook-screen');
   const toolbar = el('div', 'notebook-toolbar');
-  const back = el('a', 'btn btn-ghost', 'ノート一覧');
+  const back = el('a', 'back-link', '← ノート一覧');
   back.href = '#/';
 
   const heading = el('div', 'notebook-heading');
   const title = el('h2', 'hand', notebook.title);
   title.id = 'notebook-title';
   title.tabIndex = -1;
-  const summary = el('p', 'notebook-summary', `${stats.total}語 · 覚えた ${stats.percent}%`);
+  const summary = el('p', 'notebook-summary', notebookLabel(notebook, totalWords || words));
   heading.append(title, summary);
   toolbar.append(back, heading, renderPen(pen, onTogglePen, onSelectPen));
   if (pen?.active) screen.classList.add('is-pen-mode');
@@ -238,17 +231,31 @@ export function renderNotebook(container, options) {
     translation.type = 'button';
     translation.setAttribute('aria-pressed', notebook.showTranslation === false ? 'false' : 'true');
     translation.addEventListener('click', () => options.onToggleTranslation?.());
-    const lookup = el('button', notebook.autoLookup === false ? 'btn btn-ghost' : 'btn btn-ghost is-on', '自動検索');
+    const lookupWrap = el('div', 'lookup-control');
+    const lookup = el('button', notebook.autoLookup === false ? 'btn btn-auto' : 'btn btn-auto is-on', '自動翻訳');
     lookup.type = 'button';
     lookup.setAttribute('aria-pressed', notebook.autoLookup === false ? 'false' : 'true');
     lookup.addEventListener('click', () => options.onToggleLookup?.());
+    const lookupMore = el('button', 'lookup-more', '▾');
+    lookupMore.type = 'button';
+    lookupMore.setAttribute('aria-label', '翻訳の操作');
+    lookupMore.setAttribute('aria-haspopup', 'menu');
+    lookupMore.setAttribute('aria-expanded', 'false');
+    lookupMore.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleLookupMenu(lookupMore, options.onLookupMissing);
+    });
+    lookupWrap.append(lookup, lookupMore);
     const practice = el('button', 'btn btn-ghost', '練習する');
     practice.type = 'button';
     practice.addEventListener('click', onStartPractice);
     const focus = el('button', 'btn btn-ghost', '集中練習');
     focus.type = 'button';
     focus.addEventListener('click', onStartFocus);
-    tools.append(translation, lookup, practice, focus);
+    const status = el('p', 'tool-status');
+    status.id = 'tool-status';
+    status.hidden = true;
+    tools.append(translation, lookupWrap, practice, focus, status);
   }
 
   const book = el('div', 'book');
@@ -458,7 +465,8 @@ function renderEditableWord(word, slot, options) {
   const third = katakana
     ? buildGlossField(word, slot, 'origin', options)
     : buildPaperField(word, slot, 'hiragana', options);
-  fragment.append(kanji, translation, third, buildLineTools(word, slot, options));
+  if (katakana) fragment.append(kanji, translation, third, buildLineTools(word, slot, options));
+  else fragment.append(kanji, third, translation, buildLineTools(word, slot, options));
   bindPaperLine(kanji, katakana ? null : third, slot, options);
   return fragment;
 }
@@ -590,16 +598,36 @@ function bindGlossInput(input, slot, options) {
 
 function focusNextField(input, slot) {
   const line = input.closest('.word-line');
-  const order = ['kanji', 'translation', 'hiragana', 'origin'];
+  const order = ['kanji', 'hiragana', 'translation', 'origin'];
   const index = order.indexOf(input.dataset.field);
   for (let cursor = index + 1; cursor < order.length; cursor += 1) {
     const next = line?.querySelector(`[data-field="${order[cursor]}"]`);
     if (next instanceof HTMLElement && next.tabIndex !== -1 && !next.closest('.is-concealed')) {
       next.focus();
-      return;
+      return true;
     }
   }
-  document.querySelector(`[data-slot="${slot + 1}"] [data-field="kanji"]`)?.focus();
+  const nextKanji = document.querySelector(`[data-slot="${slot + 1}"] [data-field="kanji"]`);
+  if (nextKanji) {
+    nextKanji.focus();
+    return true;
+  }
+  return false;
+}
+
+function toggleLookupMenu(button, onLookupMissing) {
+  const open = button.getAttribute('aria-expanded') === 'true';
+  closeLineMenus();
+  if (open) return;
+  button.setAttribute('aria-expanded', 'true');
+  const menu = el('div', 'row-popover lookup-popover');
+  menu.setAttribute('role', 'menu');
+  menu.append(menuButton('未翻訳の単語を検索', () => onLookupMissing?.()));
+  document.body.append(menu);
+  const rect = button.getBoundingClientRect();
+  const width = menu.getBoundingClientRect().width || 220;
+  menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 80)}px`;
+  menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
 }
 
 export function syncPaperLine(word) {
@@ -738,15 +766,8 @@ function bindPaperLine(kanjiCell, readingCell, slot, options) {
       if (event.key !== 'Enter') return;
       event.preventDefault();
       emit(input.dataset.field === 'kanji');
-      if (input.dataset.field === 'kanji') {
-        focusNextField(input, slot);
-        return;
-      }
-      const next = document.querySelector(`[data-slot="${slot + 1}"] [data-field="kanji"]`);
-      if (next) {
-        next.focus();
-        return;
-      }
+      const moved = focusNextField(input, slot);
+      if (moved) return;
       const line = input.closest('.word-line');
       const hasText = kanji.value.trim() || (reading?.value.trim() || '') || line?.dataset.wordId;
       if (hasText) options.onAdvance?.(slot + 1);
@@ -868,8 +889,8 @@ export function closeLineMenus() {
     if (typeof node.saveNote === 'function') node.saveNote();
     node.remove();
   });
-  document.querySelectorAll('.row-popover, .note-tip').forEach((node) => node.remove());
-  document.querySelectorAll('.row-more[aria-expanded="true"]').forEach((button) => {
+  document.querySelectorAll('.row-popover, .lookup-popover, .note-tip').forEach((node) => node.remove());
+  document.querySelectorAll('.row-more[aria-expanded="true"], .lookup-more[aria-expanded="true"]').forEach((button) => {
     button.setAttribute('aria-expanded', 'false');
   });
   document.querySelectorAll('.note-dot.is-pinned').forEach((dot) => dot.classList.remove('is-pinned'));
