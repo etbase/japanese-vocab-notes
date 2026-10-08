@@ -452,6 +452,24 @@
   box-shadow: inset 0 -1px 0 #e0a8b6;
 }
 
+.reading-suggest {
+  flex: none;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #b3a89c;
+  font-family: var(--font-hand);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.reading-suggest.is-prompt {
+  pointer-events: none;
+}
+
 .is-pen-mode .paper-input {
   cursor: pointer;
 }

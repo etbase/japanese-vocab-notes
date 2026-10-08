@@ -1,7 +1,9 @@
 /** 書架與筆記本內頁。使用者輸入一律以 textContent 寫入。 */
 
+import { bindKanaInput, imeBlocks, settleKana, watchIme } from './kana-input.js';
+import { lookupDictionary } from './dictionary.js';
 import { judgeAnswer } from './practice.js';
-import { PAGE_SIZE, notebookStats, pageCount, practicePrompt, sortWords, spreadFor, wordsForPage } from './vocabulary.js';
+import { PAGE_SIZE, isHiragana, notebookStats, pageCount, practicePrompt, sortWords, spreadFor, wordsForPage } from './vocabulary.js';
 
 export const COVER_COLORS = [
   { id: 'sage', label: 'セージ' },
@@ -477,9 +479,12 @@ function buildPaperField(word, slot, field, options) {
     : 'ひらがな';
   input.setAttribute('aria-label', `${slot + 1}行目の${label}`);
   if (pen?.active) input.readOnly = true;
+  if (field === 'hiragana') bindKanaInput(input, 'hiragana');
+  else if (katakana) bindKanaInput(input, 'katakana');
   fitPaperInput(input);
   wrap.append(input);
   cell.append(wrap);
+  if (field === 'hiragana') cell.append(buildReadingHint());
   cell.addEventListener('mousedown', (event) => {
     if (pen?.active) {
       event.preventDefault();
@@ -543,27 +548,33 @@ function glossInput(value, placeholder, field, language) {
   return input;
 }
 
+const KANJI_TEXT = /^[\u3400-\u9fff\uf900-\ufaff々〆]+$/u;
+
+function buildReadingHint() {
+  const hint = el('button', 'reading-suggest');
+  hint.type = 'button';
+  hint.hidden = true;
+  hint.tabIndex = -1;
+  return hint;
+}
+
 function bindGlossInput(input, slot, options) {
-  let composing = false;
+  const ime = watchIme(input);
   const emit = () => {
-    if (composing) return;
+    if (ime.composing) return;
     options.onEditGloss?.({ slot, field: input.dataset.field, value: input.value });
   };
-  input.addEventListener('compositionstart', () => {
-    composing = true;
-  });
   input.addEventListener('compositionend', () => {
-    composing = false;
     fitPaperInput(input);
-    emit();
+    setTimeout(emit, 0);
   });
   input.addEventListener('input', (event) => {
     fitPaperInput(input);
-    if (composing || event.isComposing) return;
+    if (ime.composing || event.isComposing) return;
     emit();
   });
   input.addEventListener('keydown', (event) => {
-    if (event.isComposing || composing || event.keyCode === 229) return;
+    if (imeBlocks(ime, event)) return;
     if (event.key !== 'Enter') return;
     event.preventDefault();
     emit();
@@ -620,12 +631,44 @@ function fitPaperInput(input) {
   }
 }
 
+function updateReadingHint(input) {
+  if (input?.dataset?.field !== 'hiragana') return;
+  const hint = input.closest('.word-reading')?.querySelector('.reading-suggest');
+  if (!hint) return;
+  const text = input.value.trim();
+  if (!KANJI_TEXT.test(text)) {
+    hint.hidden = true;
+    hint.textContent = '';
+    hint.classList.remove('is-prompt');
+    return;
+  }
+  input.title = 'ひらがなで入力';
+  const token = String(Number(input.dataset.hintToken || 0) + 1);
+  input.dataset.hintToken = token;
+  lookupDictionary(text).then((result) => {
+    if (input.dataset.hintToken !== token || input.value.trim() !== text) return;
+    hint.hidden = false;
+    if (result?.reading && isHiragana(result.reading)) {
+      hint.classList.remove('is-prompt');
+      hint.textContent = result.reading;
+      hint.title = 'この読みを入れる';
+      hint.setAttribute('aria-label', `読みの候補 ${result.reading}`);
+      return;
+    }
+    hint.classList.add('is-prompt');
+    hint.textContent = 'ひらがなで';
+    hint.title = 'ひらがなで入力';
+    hint.setAttribute('aria-label', 'ひらがなで入力');
+  });
+}
+
 function bindPaperLine(kanjiCell, readingCell, slot, options) {
   const kanji = kanjiCell.querySelector('input');
   const reading = readingCell?.querySelector('input') || null;
-  let composing = false;
+  const imes = new Map();
+  [kanji, reading].filter(Boolean).forEach((input) => imes.set(input, watchIme(input)));
   const emit = (lookup) => {
-    if (composing) return;
+    if ([...imes.values()].some((state) => state.composing)) return;
     options.onEditLine?.({
       slot,
       kanji: kanji.value,
@@ -633,30 +676,47 @@ function bindPaperLine(kanjiCell, readingCell, slot, options) {
       lookup: Boolean(lookup),
     });
   };
-  [kanji, reading].filter(Boolean).forEach((input) => {
-    input.addEventListener('compositionstart', () => {
-      composing = true;
-    });
-    input.addEventListener('compositionend', () => {
-      composing = false;
-      fitPaperInput(input);
+  const afterIme = (input) => {
+    settleKana(input);
+    fitPaperInput(input);
+    updateReadingHint(input);
+    emit(false);
+  };
+  const hint = readingCell?.querySelector('.reading-suggest');
+  if (hint && reading) {
+    hint.addEventListener('mousedown', (event) => event.preventDefault());
+    hint.addEventListener('click', () => {
+      const suggested = hint.textContent.trim();
+      if (hint.classList.contains('is-prompt') || !isHiragana(suggested)) return;
+      reading.value = suggested;
+      hint.hidden = true;
+      fitPaperInput(reading);
+      reading.focus();
       emit(false);
     });
+  }
+  [kanji, reading].filter(Boolean).forEach((input) => {
+    const ime = imes.get(input);
+    input.addEventListener('compositionend', () => {
+      setTimeout(() => afterIme(input), 0);
+    });
     input.addEventListener('input', (event) => {
+      if (!ime.composing && !event.isComposing) settleKana(input);
       fitPaperInput(input);
       const line = input.closest('.word-line');
       const hasText = kanji.value.trim() || (reading?.value.trim() || '');
       line?.classList.toggle('has-word', Boolean(hasText) || Boolean(line?.dataset.wordId));
-      if (composing || event.isComposing) return;
+      if (ime.composing || event.isComposing) return;
+      updateReadingHint(input);
       emit(false);
     });
     input.addEventListener('blur', () => {
-      if (composing || input.dataset.field !== 'kanji') return;
+      if (ime.composing || input.dataset.field !== 'kanji') return;
       emit(true);
     });
     input.addEventListener('keydown', (event) => {
       if (options.pen?.active) return;
-      if (event.isComposing || composing || event.keyCode === 229) return;
+      if (imeBlocks(ime, event)) return;
       if (event.key !== 'Enter') return;
       event.preventDefault();
       emit(input.dataset.field === 'kanji');
@@ -867,6 +927,7 @@ function renderAnswerField(word, answers, revealed, hints, notebook) {
   input.enterKeyHint = 'done';
   input.setAttribute('aria-label', katakana ? 'カタカナ' : `${word.kanji}のひらがな`);
   input.dataset.wordInput = word.id;
+  bindKanaInput(input, script);
   if (saved?.value) input.value = saved.value;
   const judge = el('span', 'judge');
   judge.setAttribute('aria-live', 'polite');
@@ -879,10 +940,12 @@ function renderAnswerField(word, answers, revealed, hints, notebook) {
 }
 
 function bindAnswerInput(input, judge, word, answers, { expected, script }) {
-  let composing = false;
+  const ime = watchIme(input);
   let timer = 0;
-  const run = () => {
-    if (composing) return;
+  const run = (commit = false) => {
+    if (ime.composing) return;
+    settleKana(input);
+    if (!commit && /[A-Za-z]/.test(input.value)) return;
     const result = judgeAnswer(input.value, expected, { composing: false, script });
     paintJudgement(input, judge, result);
     if (answers) {
@@ -894,28 +957,27 @@ function bindAnswerInput(input, judge, word, answers, { expected, script }) {
     }
   };
   input.addEventListener('compositionstart', () => {
-    composing = true;
     clearTimeout(timer);
     input.classList.remove('is-correct', 'is-incorrect');
     judge.textContent = '';
   });
   input.addEventListener('compositionend', () => {
-    composing = false;
     clearTimeout(timer);
-    run();
+    setTimeout(run, 0);
   });
   input.addEventListener('input', (event) => {
-    if (composing || event.isComposing) return;
+    if (ime.composing || event.isComposing) return;
+    settleKana(input);
     clearTimeout(timer);
     input.classList.remove('is-correct', 'is-incorrect');
     judge.textContent = '';
     timer = setTimeout(run, 350);
   });
   input.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' || composing || event.isComposing) return;
+    if (event.key !== 'Enter' || imeBlocks(ime, event)) return;
     event.preventDefault();
     clearTimeout(timer);
-    run();
+    run(true);
   });
 }
 
@@ -998,6 +1060,7 @@ function renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, o
   input.enterKeyHint = 'done';
   input.setAttribute('aria-label', katakana ? 'カタカナ' : `${prompt}のひらがな`);
   input.dataset.focusInput = 'true';
+  bindKanaInput(input, katakana ? 'katakana' : 'hiragana');
   input.value = focusDraft || '';
   const judge = el('span', 'judge');
   judge.setAttribute('aria-live', 'polite');
@@ -1008,11 +1071,13 @@ function renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, o
 }
 
 function bindFocusInput(input, judge, { expected, script }, { onFocusCorrect, onFocusWrong, onFocusDraft }) {
-  let composing = false;
+  const ime = watchIme(input);
   let timer = 0;
   let lastValue = '';
-  const run = () => {
-    if (composing) return;
+  const run = (commit = false) => {
+    if (ime.composing) return;
+    settleKana(input);
+    if (!commit && /[A-Za-z]/.test(input.value)) return;
     const result = judgeAnswer(input.value, expected, { composing: false, script });
     if (result.status === 'empty') {
       paintJudgement(input, judge, result);
@@ -1030,29 +1095,28 @@ function bindFocusInput(input, judge, { expected, script }, { onFocusCorrect, on
     onFocusWrong(input.value);
   };
   input.addEventListener('compositionstart', () => {
-    composing = true;
     clearTimeout(timer);
     input.classList.remove('is-correct', 'is-incorrect');
     judge.textContent = '';
   });
   input.addEventListener('compositionend', () => {
-    composing = false;
     clearTimeout(timer);
-    run();
+    setTimeout(run, 0);
   });
   input.addEventListener('input', (event) => {
+    if (ime.composing || event.isComposing) return;
+    settleKana(input);
     onFocusDraft?.(input.value);
-    if (composing || event.isComposing) return;
     clearTimeout(timer);
     input.classList.remove('is-correct', 'is-incorrect');
     judge.textContent = '';
     timer = setTimeout(run, 350);
   });
   input.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter' || composing || event.isComposing) return;
+    if (event.key !== 'Enter' || imeBlocks(ime, event)) return;
     event.preventDefault();
     clearTimeout(timer);
-    run();
+    run(true);
   });
 }
 

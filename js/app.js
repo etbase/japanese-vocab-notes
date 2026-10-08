@@ -199,7 +199,8 @@ function saveSlotNow(slot, kanji, hiragana, { lookup = false } = {}) {
   const nextKanji = String(kanji ?? '').trim();
   const nextReading = String(hiragana ?? '').trim();
   const input = line?.querySelector('[data-field="hiragana"]');
-  const invalid = Boolean(nextReading) && !isHiragana(nextReading);
+  const typingRomaji = document.activeElement === input && /^[A-Za-z]+$/.test(nextReading);
+  const invalid = Boolean(nextReading) && !isHiragana(nextReading) && !typingRomaji;
   if (input) {
     input.classList.toggle('is-invalid', invalid);
     if (invalid) input.setAttribute('aria-invalid', 'true');
