@@ -3,7 +3,7 @@
 import { bindKanaInput, imeBlocks, settleKana, watchIme } from './kana-input.js';
 import { lookupDictionary } from './dictionary.js';
 import { judgeAnswer } from './practice.js';
-import { PAGE_SIZE, isHiragana, notebookStats, pageCount, practicePrompt, sortWords, spreadFor, wordsForPage } from './vocabulary.js';
+import { PAGE_SIZE, isHiragana, notebookStats, pageCount, sortWords, spreadFor, wordsForPage } from './vocabulary.js';
 
 export const COVER_COLORS = [
   { id: 'sage', label: 'セージ' },
@@ -117,7 +117,6 @@ function renderCover(notebook, words, { onEdit, onDelete, freshId }) {
   );
 
   const plate = el('div', 'cover-plate');
-  plate.append(el('span', 'cover-tape'));
   const title = el('h3', 'cover-title hand', notebook.title);
   plate.append(title);
 
@@ -286,6 +285,7 @@ export function renderNotebook(container, options) {
         onInsertLine,
         onSaveNote,
         pageLimit,
+        study,
       }));
     });
     book.append(spread);
@@ -375,6 +375,7 @@ function renderPage(options) {
     const word = studying ? pageWords[index] : (editable ? sorted[slot] || null : null);
     const line = el('li', 'word-line');
     if (studying) {
+      line.classList.add('is-study');
       if (!word) line.setAttribute('aria-hidden', 'true');
       else line.append(renderWord(word, options));
     } else if (!editable) {
@@ -382,7 +383,7 @@ function renderPage(options) {
     } else {
       line.classList.add('is-editable');
       if (notebook?.type === 'katakana') line.classList.add('is-katakana');
-      if (notebook?.showTranslation !== false) line.classList.add('has-gloss');
+      if (word?.glossStale) line.dataset.glossStale = 'true';
       if (word && (word.kanji || word.hiragana)) line.classList.add('has-word');
       line.dataset.slot = String(slot);
       if (word?.id) line.dataset.wordId = word.id;
@@ -396,15 +397,15 @@ function renderPage(options) {
 }
 
 function renderWord(word, options) {
-  const { flashWordId, pen, studying, answers, revealed, hints, onHighlight, notebook } = options;
-  const katakana = notebook?.type === 'katakana';
-  const expected = katakana ? word.kanji : word.hiragana;
+  const { flashWordId, pen, studying, answers, revealed, hints, onHighlight, notebook, study } = options;
+  const script = study?.script || (notebook?.type === 'katakana' ? 'katakana' : 'hiragana');
+  const expected = script === 'zh' ? (word.translation || '') : (script === 'katakana' ? word.kanji : word.hiragana);
   const fragment = document.createDocumentFragment();
   const fresh = flashWordId === word.id;
   const kanji = el('span', 'word-kanji hand');
   kanji.translate = false;
-  if (studying && katakana) {
-    kanji.textContent = practicePrompt(word);
+  if (studying && (script === 'katakana' || script === 'zh')) {
+    kanji.append(renderPracticePrompt(word, script));
   } else {
     kanji.append(markNode(word.kanji, fieldHighlight(word, 'kanji'), fresh, inkVariant(word.id, 'kanji')));
     bindPenTarget(kanji, word, pen, onHighlight, 'kanji');
@@ -413,7 +414,7 @@ function renderWord(word, options) {
   const reading = el('span', 'word-reading hand');
   reading.translate = false;
   if (studying) {
-    reading.append(renderAnswerField(word, answers, revealed, hints, notebook));
+    reading.append(renderAnswerField(word, answers, revealed, hints, notebook, script));
   } else {
     reading.append(markNode(word.hiragana, fieldHighlight(word, 'reading'), fresh, inkVariant(word.id, 'reading')));
     bindPenTarget(reading, word, pen, onHighlight, 'reading');
@@ -436,15 +437,29 @@ function renderWord(word, options) {
   return fragment;
 }
 
+function renderPracticePrompt(word, script) {
+  if (script === 'zh') {
+    const prompt = el('span', 'hand', word?.kanji || '');
+    prompt.translate = false;
+    return prompt;
+  }
+  const block = el('span', 'practice-prompt');
+  const meaning = el('span', 'practice-meaning', word?.translation || '');
+  block.append(meaning);
+  if (word?.originWord) block.append(el('span', 'practice-origin', word.originWord));
+  return block;
+}
+
 function renderEditableWord(word, slot, options) {
   const katakana = options.notebook?.type === 'katakana';
   const fragment = document.createDocumentFragment();
   const kanji = buildPaperField(word, slot, 'kanji', options);
-  const reading = katakana ? null : buildPaperField(word, slot, 'hiragana', options);
-  const gloss = buildGloss(word, slot, options);
-  if (reading) fragment.append(kanji, reading, buildLineTools(word, slot, options), gloss);
-  else fragment.append(kanji, buildLineTools(word, slot, options), gloss);
-  bindPaperLine(kanji, reading, slot, options);
+  const translation = buildGlossField(word, slot, 'translation', options);
+  const third = katakana
+    ? buildGlossField(word, slot, 'origin', options)
+    : buildPaperField(word, slot, 'hiragana', options);
+  fragment.append(kanji, translation, third, buildLineTools(word, slot, options));
+  bindPaperLine(kanji, katakana ? null : third, slot, options);
   return fragment;
 }
 
@@ -501,36 +516,23 @@ function buildPaperField(word, slot, field, options) {
   return cell;
 }
 
-function buildGloss(word, slot, options) {
-  const gloss = el('div', 'line-gloss');
-  if (options.notebook?.showTranslation === false) gloss.hidden = true;
-  const katakana = options.notebook?.type === 'katakana';
-  if (katakana) {
-    gloss.append(
-      glossInput(word?.originWord || '', '原文', 'origin', word?.originLanguage || ''),
-      el('span', 'gloss-paren', '（'),
-      glossInput(word?.translation || '', '意味を入力', 'translation', ''),
-      el('span', 'gloss-paren', '）'),
-    );
-  } else {
-    gloss.append(glossInput(word?.translation || '', '意味を入力', 'translation', ''));
+function buildGlossField(word, slot, field, options) {
+  const cell = el('span', field === 'origin' ? 'line-origin' : 'line-gloss');
+  const concealed = options.notebook?.showTranslation === false;
+  if (concealed) {
+    cell.classList.add('is-concealed');
+    cell.setAttribute('aria-hidden', 'true');
   }
-  gloss.querySelectorAll('.gloss-input').forEach((input) => bindGlossInput(input, slot, options));
-  if (word?.glossStale && options.notebook?.showTranslation !== false) {
-    const again = el('button', 'gloss-action', '再検索');
-    again.type = 'button';
-    again.tabIndex = -1;
-    again.addEventListener('click', () => options.onRelookup?.(slot));
-    const keep = el('button', 'gloss-action', 'このまま');
-    keep.type = 'button';
-    keep.tabIndex = -1;
-    keep.addEventListener('click', () => options.onKeepGloss?.(slot));
-    gloss.append(again, keep);
-  }
-  return gloss;
+  const value = field === 'origin' ? (word?.originWord || '') : (word?.translation || '');
+  const label = field === 'origin' ? '原文' : '中国語';
+  const input = glossInput(value, label, field, field === 'origin' ? (word?.originLanguage || '') : '');
+  if (concealed) input.tabIndex = -1;
+  cell.append(input);
+  bindGlossInput(input, slot, options);
+  return cell;
 }
 
-function glossInput(value, placeholder, field, language) {
+function glossInput(value, label, field, language) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'gloss-input hand';
@@ -538,13 +540,12 @@ function glossInput(value, placeholder, field, language) {
   input.autocomplete = 'off';
   input.autocapitalize = 'off';
   input.spellcheck = false;
-  input.placeholder = placeholder;
+  input.placeholder = '';
   input.maxLength = 80;
   input.dataset.field = field;
   input.value = value;
-  input.setAttribute('aria-label', placeholder);
-  if (language) input.title = language;
-  fitPaperInput(input);
+  input.title = value || language || '';
+  input.setAttribute('aria-label', label);
   return input;
 }
 
@@ -564,12 +565,17 @@ function bindGlossInput(input, slot, options) {
     if (ime.composing) return;
     options.onEditGloss?.({ slot, field: input.dataset.field, value: input.value });
   };
+  input.addEventListener('compositionstart', () => {
+    input.dataset.dirty = 'true';
+  });
   input.addEventListener('compositionend', () => {
-    fitPaperInput(input);
+    input.dataset.dirty = 'true';
+    input.title = input.value;
     setTimeout(emit, 0);
   });
   input.addEventListener('input', (event) => {
-    fitPaperInput(input);
+    input.dataset.dirty = 'true';
+    input.title = input.value;
     if (ime.composing || event.isComposing) return;
     emit();
   });
@@ -578,11 +584,22 @@ function bindGlossInput(input, slot, options) {
     if (event.key !== 'Enter') return;
     event.preventDefault();
     emit();
-    const next = input.dataset.field === 'origin'
-      ? input.parentElement?.querySelector('[data-field="translation"]')
-      : document.querySelector(`[data-slot="${slot + 1}"] [data-field="kanji"]`);
-    next?.focus();
+    focusNextField(input, slot);
   });
+}
+
+function focusNextField(input, slot) {
+  const line = input.closest('.word-line');
+  const order = ['kanji', 'translation', 'hiragana', 'origin'];
+  const index = order.indexOf(input.dataset.field);
+  for (let cursor = index + 1; cursor < order.length; cursor += 1) {
+    const next = line?.querySelector(`[data-field="${order[cursor]}"]`);
+    if (next instanceof HTMLElement && next.tabIndex !== -1 && !next.closest('.is-concealed')) {
+      next.focus();
+      return;
+    }
+  }
+  document.querySelector(`[data-slot="${slot + 1}"] [data-field="kanji"]`)?.focus();
 }
 
 export function syncPaperLine(word) {
@@ -596,10 +613,11 @@ export function syncPaperLine(word) {
   ].forEach(([field, value]) => {
     const input = line.querySelector(`[data-field="${field}"]`);
     if (!(input instanceof HTMLInputElement) || document.activeElement === input) return;
-    if (input.value === value) return;
+    if (input.dataset.dirty === 'true' || input.value === value) return;
     input.value = value;
-    fitPaperInput(input);
-    if (field === 'origin' && word.originLanguage) input.title = word.originLanguage;
+    if (input.classList.contains('gloss-input')) input.title = value || input.title;
+    else fitPaperInput(input);
+    if (field === 'origin' && word.originLanguage && !value) input.title = word.originLanguage;
   });
 }
 
@@ -624,7 +642,7 @@ function fitPaperInput(input) {
     document.fonts.ready.then(() => {
       fontsReady = true;
       fontFitPending = false;
-      document.querySelectorAll('.paper-input, .gloss-input').forEach((node) => {
+      document.querySelectorAll('.paper-input').forEach((node) => {
         if (node instanceof HTMLInputElement && node.value) fitPaperInput(node);
       });
     });
@@ -720,8 +738,8 @@ function bindPaperLine(kanjiCell, readingCell, slot, options) {
       if (event.key !== 'Enter') return;
       event.preventDefault();
       emit(input.dataset.field === 'kanji');
-      if (input.dataset.field === 'kanji' && reading) {
-        reading.focus();
+      if (input.dataset.field === 'kanji') {
+        focusNextField(input, slot);
         return;
       }
       const next = document.querySelector(`[data-slot="${slot + 1}"] [data-field="kanji"]`);
@@ -822,6 +840,10 @@ function toggleRowMenu(button, slot, options) {
   const note = menuButton('メモを編集', () => openNotePopover(button, slot, options));
   const again = menuButton('翻訳を再検索', () => options.onRelookup?.(slot));
   menu.append(remove, insert, note, again);
+  const line = document.querySelector(`[data-slot="${slot}"]`);
+  if (line?.dataset.glossStale === 'true') {
+    menu.append(menuButton('このまま', () => options.onKeepGloss?.(slot)));
+  }
   document.body.append(menu);
   const rect = button.getBoundingClientRect();
   const width = 196;
@@ -911,30 +933,31 @@ function bindPenTarget(node, word, pen, onHighlight, field) {
   });
 }
 
-function renderAnswerField(word, answers, revealed, hints, notebook) {
-  const katakana = notebook?.type === 'katakana';
-  const expected = katakana ? word.kanji : word.hiragana;
-  const script = katakana ? 'katakana' : 'hiragana';
+function renderAnswerField(word, answers, revealed, hints, notebook, script) {
+  const answerScript = script || (notebook?.type === 'katakana' ? 'katakana' : 'hiragana');
+  const expected = answerScript === 'zh'
+    ? (word.translation || '')
+    : (answerScript === 'katakana' ? word.kanji : word.hiragana);
   const saved = answers?.[word.id];
   const field = el('span', 'answer-field');
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'reading-input';
-  input.lang = 'ja';
+  input.lang = answerScript === 'zh' ? 'zh-Hant' : 'ja';
   input.autocomplete = 'off';
   input.autocapitalize = 'off';
   input.spellcheck = false;
   input.enterKeyHint = 'done';
-  input.setAttribute('aria-label', katakana ? 'カタカナ' : `${word.kanji}のひらがな`);
+  input.setAttribute('aria-label', answerScript === 'zh' ? '中国語' : (answerScript === 'katakana' ? 'カタカナ' : `${word.kanji}のひらがな`));
   input.dataset.wordInput = word.id;
-  bindKanaInput(input, script);
+  if (answerScript !== 'zh') bindKanaInput(input, answerScript);
   if (saved?.value) input.value = saved.value;
   const judge = el('span', 'judge');
   judge.setAttribute('aria-live', 'polite');
   field.append(input, judge);
   if (revealed?.[word.id]) field.append(el('span', 'revealed hand', expected));
   else if (hints?.[word.id]) field.append(el('span', 'hint hand', [...expected][0] || ''));
-  bindAnswerInput(input, judge, word, answers, { expected, script });
+  bindAnswerInput(input, judge, word, answers, { expected, script: answerScript });
   if (saved?.status) paintJudgement(input, judge, { status: saved.status, message: saved.message || '' });
   return field;
 }
@@ -1043,29 +1066,30 @@ function renderPracticeResult(words, answers, { onRetry, onReview, onExitStudy }
 function renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, onFocusDraft }) {
   const wordId = study.wordIds[study.index];
   const word = study.wordsById[wordId];
-  const katakana = study.script === 'katakana';
-  const prompt = katakana ? practicePrompt(word) : (word?.kanji || '');
-  const expected = katakana ? (word?.kanji || '') : (word?.hiragana || '');
+  const script = study.script === 'zh' || study.script === 'katakana' ? study.script : 'hiragana';
+  const expected = script === 'zh' ? (word?.translation || '') : (script === 'katakana' ? (word?.kanji || '') : (word?.hiragana || ''));
   const sheet = el('article', 'page focus-sheet');
   sheet.append(el('p', 'focus-count', `${study.index + 1} / ${study.wordIds.length}`));
-  const kanji = el('p', 'focus-kanji hand', prompt);
+  const kanji = el('div', 'focus-kanji hand');
   kanji.translate = false;
+  if (script === 'hiragana') kanji.textContent = word?.kanji || '';
+  else kanji.append(renderPracticePrompt(word, script));
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'reading-input focus-input';
-  input.lang = 'ja';
+  input.lang = script === 'zh' ? 'zh-Hant' : 'ja';
   input.autocomplete = 'off';
   input.autocapitalize = 'off';
   input.spellcheck = false;
   input.enterKeyHint = 'done';
-  input.setAttribute('aria-label', katakana ? 'カタカナ' : `${prompt}のひらがな`);
+  input.setAttribute('aria-label', script === 'zh' ? '中国語' : (script === 'katakana' ? 'カタカナ' : `${word?.kanji || ''}のひらがな`));
   input.dataset.focusInput = 'true';
-  bindKanaInput(input, katakana ? 'katakana' : 'hiragana');
+  if (script !== 'zh') bindKanaInput(input, script);
   input.value = focusDraft || '';
   const judge = el('span', 'judge');
   judge.setAttribute('aria-live', 'polite');
   sheet.append(kanji, input, judge);
-  bindFocusInput(input, judge, { expected, script: katakana ? 'katakana' : 'hiragana' }, { onFocusCorrect, onFocusWrong, onFocusDraft });
+  bindFocusInput(input, judge, { expected, script }, { onFocusCorrect, onFocusWrong, onFocusDraft });
   queueMicrotask(() => input.focus());
   return sheet;
 }

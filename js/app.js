@@ -34,7 +34,6 @@ import {
   isHiragana,
   notebookStats,
   pageCount,
-  practicePrompt,
   spreadFor,
   wordsForPage,
 } from './vocabulary.js';
@@ -143,10 +142,18 @@ function displayedWords(allWords) {
     const ids = new Set(state.study.reviewIds);
     words = words.filter((word) => ids.has(word.id));
   }
-  if (state.study && currentNotebook()?.type === 'katakana') {
-    words = words.filter((word) => practicePrompt(word));
+  if (state.study?.script === 'zh' || state.study?.script === 'katakana') {
+    words = words.filter((word) => practiceEligible(word, state.study.script));
   }
   return words;
+}
+
+function practiceEligible(word, script) {
+  if (script === 'zh') return Boolean(String(word?.translation || '').trim());
+  if (script === 'katakana') {
+    return Boolean(String(word?.translation || '').trim() || String(word?.originWord || '').trim());
+  }
+  return Boolean(String(word?.kanji || '').trim() || String(word?.hiragana || '').trim());
 }
 
 function currentNotebook() {
@@ -157,10 +164,11 @@ function meaningfulWords(words) {
   return words.filter((word) => word.kanji.trim() || word.hiragana.trim());
 }
 
-function practiceWords(words) {
+function practiceWords(words, script) {
   const list = meaningfulWords(words);
-  if (currentNotebook()?.type !== 'katakana') return list;
-  return list.filter((word) => practicePrompt(word));
+  const mode = script || (currentNotebook()?.type === 'katakana' ? 'katakana' : 'hiragana');
+  if (mode === 'hiragana') return list;
+  return list.filter((word) => practiceEligible(word, mode));
 }
 
 function pageLimitFor(allWords) {
@@ -277,7 +285,10 @@ function saveGlossNow(slot, field, value) {
     ? getWordsByNotebook(state.notebookId).find((word) => word.id === id)
     : null;
   if (field === 'origin') {
-    if ((stored?.originWord || '') === text) return;
+    if ((stored?.originWord || '') === text) {
+      clearGlossDirty(slot, field, text);
+      return;
+    }
     const patch = {
       originWord: text,
       originEdited: true,
@@ -286,12 +297,22 @@ function saveGlossNow(slot, field, value) {
     };
     if (stored) updateWord(stored.id, patch);
     else if (text) ensureWordAt(state.notebookId, slot, patch).then(() => stampLineIds());
+    clearGlossDirty(slot, field, text);
     return;
   }
-  if ((stored?.translation || '') === text) return;
+  if ((stored?.translation || '') === text) {
+    clearGlossDirty(slot, field, text);
+    return;
+  }
   const patch = { translation: text, translationEdited: true, glossStale: false };
   if (stored) updateWord(stored.id, patch);
   else if (text) ensureWordAt(state.notebookId, slot, patch).then(() => stampLineIds());
+  clearGlossDirty(slot, field, text);
+}
+
+function clearGlossDirty(slot, field, text) {
+  const input = document.querySelector(`[data-slot="${slot}"] [data-field="${field}"]`);
+  if (input instanceof HTMLInputElement && input.value.trim() === text) delete input.dataset.dirty;
 }
 
 function flushGlossEdits() {
@@ -323,6 +344,15 @@ async function applyLookup(wordId, head, force) {
   const result = await lookupDictionary(key);
   const latest = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
   if (!latest || latest.kanji !== key) return;
+  const line = document.querySelector(`[data-word-id="${CSS.escape(wordId)}"]`);
+  const pendingValue = (field) => {
+    const input = line?.querySelector(`[data-field="${field}"]`);
+    return input instanceof HTMLInputElement ? input.value.trim() : null;
+  };
+  const pendingTranslation = pendingValue('translation');
+  const pendingOrigin = pendingValue('origin');
+  const translationDirty = pendingTranslation !== null && pendingTranslation !== (latest.translation || '');
+  const originDirty = pendingOrigin !== null && pendingOrigin !== (latest.originWord || '');
   const patch = { lookupKey: key };
   if (force) patch.glossStale = false;
   if (
@@ -333,12 +363,12 @@ async function applyLookup(wordId, head, force) {
   ) {
     patch.hiragana = result.reading;
   }
-  if (result?.originWord && (force || !latest.originEdited)) {
+  if (result?.originWord && (force || (!latest.originEdited && !originDirty))) {
     patch.originWord = result.originWord;
     patch.originLanguage = result.originLanguage || '';
     if (force) patch.originEdited = false;
   }
-  if (result?.translation && (force || !latest.translationEdited)) {
+  if (result?.translation && (force || (!latest.translationEdited && !translationDirty))) {
     patch.translation = result.translation;
     if (force) patch.translationEdited = false;
   }
@@ -601,70 +631,83 @@ function selectPen(tool) {
   render();
 }
 
-function emptyWordNotice() {
+function startPractice() {
+  if (currentNotebook()?.type === 'katakana') {
+    chooseStudy('practice');
+    return;
+  }
+  beginStudy('practice', 'hiragana');
+}
+
+function startFocus() {
+  if (currentNotebook()?.type === 'katakana') {
+    chooseStudy('focus');
+    return;
+  }
+  beginStudy('focus', 'hiragana');
+}
+
+function chooseStudy(kind) {
   openModal({
     title: '練習',
-    body: 'まだ単語がありません。',
-    actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+    body: '練習の種類を選んでください。',
+    actions: [
+      {
+        label: 'カタカナを練習',
+        className: 'btn btn-primary',
+        onClick: () => {
+          closeModal({ restore: false });
+          beginStudy(kind, 'katakana');
+        },
+      },
+      {
+        label: '中国語を練習',
+        className: 'btn btn-ghost',
+        onClick: () => {
+          closeModal({ restore: false });
+          beginStudy(kind, 'zh');
+        },
+      },
+    ],
   });
 }
 
-function startPractice() {
-  const notebook = currentNotebook();
-  const words = practiceWords(getWordsByNotebook(state.notebookId));
+function beginStudy(kind, script) {
+  flushLineEdits();
+  flushGlossEdits();
+  const words = practiceWords(getWordsByNotebook(state.notebookId), script);
   if (!words.length) {
-    if (notebook?.type === 'katakana') {
-      openModal({
-        title: '練習',
-        body: '原文か訳を書くと、カタカナの練習ができます。',
-        actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
-      });
-      return;
-    }
-    emptyWordNotice();
+    const body = script === 'zh'
+      ? '中国語の訳がある単語がありません。'
+      : (script === 'katakana' ? '訳か原文があると、カタカナの練習ができます。' : 'まだ単語がありません。');
+    openModal({
+      title: '練習',
+      body,
+      actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+    });
     return;
   }
-  state.study = {
-    kind: 'practice',
-    reviewIds: null,
-    script: notebook?.type === 'katakana' ? 'katakana' : 'hiragana',
-  };
   state.answers = {};
   state.revealed = {};
   state.hints = {};
   state.showResult = false;
-  render();
-}
-
-function startFocus() {
-  const notebook = currentNotebook();
-  const words = practiceWords(getWordsByNotebook(state.notebookId));
-  if (!words.length) {
-    if (notebook?.type === 'katakana') {
-      openModal({
-        title: '練習',
-        body: '原文か訳を書くと、カタカナの練習ができます。',
-        actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
-      });
-      return;
-    }
-    emptyWordNotice();
-    return;
-  }
-  state.study = {
-    kind: 'focus',
-    script: notebook?.type === 'katakana' ? 'katakana' : 'hiragana',
-    wordIds: words.map((word) => word.id),
-    wordsById: Object.fromEntries(words.map((word) => [word.id, word])),
-    index: 0,
-    wrong: 0,
-    startedAt: Date.now(),
-    finished: false,
-    durationMs: 0,
-  };
   state.focusDraft = '';
-  state.showResult = false;
-  state.skipSnapshot = true;
+  if (kind === 'focus') {
+    state.study = {
+      kind: 'focus',
+      script,
+      wordIds: words.map((word) => word.id),
+      wordsById: Object.fromEntries(words.map((word) => [word.id, word])),
+      index: 0,
+      wrong: 0,
+      startedAt: Date.now(),
+      finished: false,
+      durationMs: 0,
+    };
+    state.skipSnapshot = true;
+  } else {
+    state.study = { kind: 'practice', reviewIds: null, script };
+  }
   render();
 }
 
@@ -709,8 +752,8 @@ function finishPractice() {
   words.forEach((word) => {
     const saved = state.answers[word.id];
     if (!saved?.value) return;
-    const script = state.study?.script === 'katakana' ? 'katakana' : 'hiragana';
-    const expected = script === 'katakana' ? word.kanji : word.hiragana;
+    const script = state.study?.script === 'zh' || state.study?.script === 'katakana' ? state.study.script : 'hiragana';
+    const expected = script === 'zh' ? word.translation : (script === 'katakana' ? word.kanji : word.hiragana);
     const result = judgeAnswer(saved.value, expected, { script });
     saved.status = result.status === 'empty' ? '' : result.status;
   });
@@ -745,7 +788,7 @@ function reviewWrong() {
   state.study = {
     kind: 'practice',
     reviewIds: wrongIds,
-    script: state.study?.script === 'katakana' ? 'katakana' : 'hiragana',
+    script: state.study?.script === 'zh' || state.study?.script === 'katakana' ? state.study.script : 'hiragana',
   };
   state.answers = {};
   state.revealed = {};

@@ -80,6 +80,36 @@ function cleanNotebook(input) {
   };
 }
 
+const HAN_RE = /[\u3400-\u9fff]/u;
+let glossMigrated = false;
+
+function splitLoanGloss(translation, originWord) {
+  const current = {
+    translation: String(translation ?? '').trim(),
+    originWord: String(originWord ?? '').trim(),
+    changed: false,
+  };
+  const parsed = (!current.originWord && parseLoanPair(current.translation))
+    || (!current.translation && parseLoanPair(current.originWord));
+  if (!parsed) return current;
+  glossMigrated = true;
+  return { translation: parsed.translation, originWord: parsed.originWord, changed: true };
+}
+
+function parseLoanPair(value) {
+  const match = String(value ?? '').trim().match(/^([^（()）]{1,40})[（(]([^（()）]{1,40})[）)]$/u);
+  if (!match) return null;
+  const outside = match[1].trim();
+  const inside = match[2].trim();
+  if (!outside || !inside) return null;
+  const outsideHan = HAN_RE.test(outside);
+  const insideHan = HAN_RE.test(inside);
+  const latinOrigin = /[A-Za-z\u00C0-\u024F]/u;
+  if (!outsideHan && insideHan && latinOrigin.test(outside)) return { originWord: outside, translation: inside };
+  if (outsideHan && !insideHan && latinOrigin.test(inside)) return { originWord: inside, translation: outside };
+  return null;
+}
+
 function cleanWord(input, { strict = false } = {}) {
   if (!input || typeof input !== 'object') return null;
   const id = String(input.id ?? '').trim();
@@ -97,17 +127,21 @@ function cleanWord(input, { strict = false } = {}) {
     : (HIGHLIGHTS.has(input.highlightReading) ? input.highlightReading : null);
   const createdAt = String(input.createdAt || nowIso());
   const order = Number.isFinite(input.order) ? Math.max(0, Math.floor(input.order)) : 0;
+  const gloss = splitLoanGloss(
+    String(input.translation ?? '').slice(0, 80),
+    String(input.originWord ?? '').slice(0, 80),
+  );
   return {
     id,
     notebookId,
     kanji,
     hiragana,
     note: String(input.note ?? '').slice(0, 500),
-    translation: String(input.translation ?? '').slice(0, 80),
-    translationEdited: Boolean(input.translationEdited),
-    originWord: String(input.originWord ?? '').slice(0, 80),
+    translation: gloss.translation,
+    translationEdited: gloss.changed ? true : Boolean(input.translationEdited),
+    originWord: gloss.originWord,
     originLanguage: String(input.originLanguage ?? '').slice(0, 40),
-    originEdited: Boolean(input.originEdited),
+    originEdited: gloss.changed ? true : Boolean(input.originEdited),
     readingEdited: Boolean(input.readingEdited),
     glossStale: Boolean(input.glossStale),
     lookupKey: String(input.lookupKey ?? '').slice(0, 40),
@@ -211,9 +245,12 @@ function load() {
     return memory;
   }
   try {
+    glossMigrated = false;
     memory = normalizeState(JSON.parse(raw));
     if (isUntouchedSample(memory)) {
       memory = createSeedState();
+      persist();
+    } else if (glossMigrated) {
       persist();
     }
   } catch {
