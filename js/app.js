@@ -52,7 +52,6 @@ const state = {
   study: null,
   answers: {},
   revealed: {},
-  hints: {},
   showResult: false,
   focusDraft: '',
   focusSlot: null,
@@ -601,7 +600,6 @@ function render() {
         study: state.study,
         answers: state.answers,
         revealed: state.revealed,
-        hints: state.hints,
         showResult: state.showResult,
         focusDraft: state.focusDraft,
         onStep: step,
@@ -766,7 +764,6 @@ function beginStudy(kind, script) {
   }
   state.answers = {};
   state.revealed = {};
-  state.hints = {};
   state.showResult = false;
   state.focusDraft = '';
   if (kind === 'focus') {
@@ -817,7 +814,6 @@ function exitStudy() {
   state.study = null;
   state.answers = {};
   state.revealed = {};
-  state.hints = {};
   state.showResult = false;
   state.focusDraft = '';
   render();
@@ -846,7 +842,6 @@ function retryPractice() {
   state.skipSnapshot = true;
   state.answers = {};
   state.revealed = {};
-  state.hints = {};
   state.showResult = false;
   render();
 }
@@ -869,7 +864,6 @@ function reviewWrong() {
   };
   state.answers = {};
   state.revealed = {};
-  state.hints = {};
   state.showResult = false;
   state.page = 1;
   const hash = notebookHash(state.notebookId, 1);
@@ -887,7 +881,6 @@ function syncFromHash() {
     state.study = null;
     state.answers = {};
     state.revealed = {};
-    state.hints = {};
     state.showResult = false;
     state.focusDraft = '';
     state.pen.active = false;

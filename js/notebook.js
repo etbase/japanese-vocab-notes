@@ -173,7 +173,6 @@ export function renderNotebook(container, options) {
     study,
     answers,
     revealed,
-    hints,
     showResult,
     focusDraft,
     onStep,
@@ -281,7 +280,6 @@ export function renderNotebook(container, options) {
         studying,
         answers,
         revealed,
-        hints,
         onHighlight,
         onDeleteWord,
         onEditLine,
@@ -404,7 +402,7 @@ function renderPage(options) {
 }
 
 function renderWord(word, options) {
-  const { flashWordId, pen, studying, answers, revealed, hints, onHighlight, notebook, study } = options;
+  const { flashWordId, pen, studying, answers, revealed, onHighlight, notebook, study } = options;
   const script = study?.script || (notebook?.type === 'katakana' ? 'katakana' : 'hiragana');
   const expected = script === 'zh' ? (word.translation || '') : (script === 'katakana' ? word.kanji : word.hiragana);
   const fragment = document.createDocumentFragment();
@@ -421,7 +419,7 @@ function renderWord(word, options) {
   const reading = el('span', 'word-reading hand');
   reading.translate = false;
   if (studying) {
-    reading.append(renderAnswerField(word, answers, revealed, hints, notebook, script));
+    reading.append(renderAnswerField(word, answers, revealed, notebook, script));
   } else {
     reading.append(markNode(word.hiragana, fieldHighlight(word, 'reading'), fresh, inkVariant(word.id, 'reading')));
     bindPenTarget(reading, word, pen, onHighlight, 'reading');
@@ -431,13 +429,10 @@ function renderWord(word, options) {
   if (studying) {
     const tools = el('div', 'answer-tools');
     if (!revealed?.[word.id]) {
-      const hint = el('button', 'text-button', 'ヒント');
-      hint.type = 'button';
-      hint.addEventListener('click', () => showHint(reading, hints, word.id, expected));
       const answer = el('button', 'text-button', '答え');
       answer.type = 'button';
       answer.addEventListener('click', () => showAnswer(reading, revealed, word.id, expected));
-      tools.append(hint, answer);
+      tools.append(answer);
     }
     fragment.append(tools);
   }
@@ -954,7 +949,7 @@ function bindPenTarget(node, word, pen, onHighlight, field) {
   });
 }
 
-function renderAnswerField(word, answers, revealed, hints, notebook, script) {
+function renderAnswerField(word, answers, revealed, notebook, script) {
   const answerScript = script || (notebook?.type === 'katakana' ? 'katakana' : 'hiragana');
   const expected = answerScript === 'zh'
     ? (word.translation || '')
@@ -977,7 +972,6 @@ function renderAnswerField(word, answers, revealed, hints, notebook, script) {
   judge.setAttribute('aria-live', 'polite');
   field.append(input, judge);
   if (revealed?.[word.id]) field.append(el('span', 'revealed hand', expected));
-  else if (hints?.[word.id]) field.append(el('span', 'hint hand', [...expected][0] || ''));
   bindAnswerInput(input, judge, word, answers, { expected, script: answerScript });
   if (saved?.status) paintJudgement(input, judge, { status: saved.status, message: saved.message || '' });
   return field;
@@ -1043,17 +1037,8 @@ function paintJudgement(input, judge, result) {
   judge.textContent = '';
 }
 
-function showHint(reading, hints, wordId, expected) {
-  if (reading.querySelector('.hint')) return;
-  const field = reading.querySelector('.answer-field');
-  if (!field || field.querySelector('.revealed')) return;
-  field.append(el('span', 'hint hand', [...expected][0] || ''));
-  if (hints) hints[wordId] = true;
-}
-
 function showAnswer(reading, revealed, wordId, expected) {
   const field = reading.querySelector('.answer-field');
-  field?.querySelector('.hint')?.remove();
   if (field && !field.querySelector('.revealed')) {
     field.append(el('span', 'revealed hand', expected));
   }

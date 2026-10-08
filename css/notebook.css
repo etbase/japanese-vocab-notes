@@ -673,7 +673,6 @@
   color: #9a5564;
 }
 
-.hint,
 .revealed {
   flex: none;
   color: var(--ink-soft);
