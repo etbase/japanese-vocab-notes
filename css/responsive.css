@@ -36,6 +36,15 @@ html.is-compact .word-line {
   padding-left: 0;
 }
 
+html.is-compact .word-line.is-katakana {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+html.is-compact .word-line.has-gloss .word-kanji,
+html.is-compact .word-line.has-gloss .word-reading {
+  font-size: 16px;
+}
+
 html.is-compact .row-more {
   opacity: 1;
 }
@@ -146,6 +155,10 @@ html.is-compact .pager .btn {
 
   .word-line {
     grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.2fr) auto;
+  }
+
+  .word-line.is-katakana {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .word-kanji,

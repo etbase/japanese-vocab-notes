@@ -60,9 +60,11 @@ firestore.rules
 
 ## 資料
 
-每本筆記本有 `id`、`title`、`color`、`createdAt`、`updatedAt`。
+每本筆記本有 `id`、`title`、`color`、`type`（`kanji` 或 `katakana`）、`autoLookup`、`showTranslation`、`createdAt`、`updatedAt`。舊資料沒有類型時，打開後視為漢字ノート。
 
-每個單字有 `notebookId`、`kanji`、`hiragana`、`note`、`highlight`（`yellow` / `pink` / `green` 或空值）、`order`。
+每個單字有 `notebookId`、`kanji`、`hiragana`、`note`、`translation`、`originWord`、`originLanguage`、`highlightKanji`、`highlightReading`（`yellow` / `pink` / `green` 或空值）、`order`。
+
+讀音與外來語語源來自 [JMdict / EDICT](https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project)（EDRDG、CC BY-SA 4.0），整理在 `data/dict/`。這份資料沒有繁體中文，翻譯要自己寫。沒有標明語源的詞不會自動填原文。
 
 畫面只用 `textContent` 放入使用者輸入的文字。
 

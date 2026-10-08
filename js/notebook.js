@@ -1,7 +1,7 @@
 /** 書架與筆記本內頁。使用者輸入一律以 textContent 寫入。 */
 
 import { judgeAnswer } from './practice.js';
-import { PAGE_SIZE, notebookStats, pageCount, sortWords, spreadFor, wordsForPage } from './vocabulary.js';
+import { PAGE_SIZE, notebookStats, pageCount, practicePrompt, sortWords, spreadFor, wordsForPage } from './vocabulary.js';
 
 export const COVER_COLORS = [
   { id: 'sage', label: 'セージ' },
@@ -44,9 +44,27 @@ function penIcon() {
   return svg;
 }
 
-function markNode(text, highlight, fresh) {
-  if (!highlight) return document.createTextNode(text);
+function inkVariant(id, field) {
+  const text = `${id || 'row'}:${field || ''}`;
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash + text.charCodeAt(index) * (index + 1)) % 4;
+  }
+  return String(hash);
+}
+
+function fieldHighlight(word, field) {
+  if (!word) return null;
+  if (field === 'hiragana' || field === 'reading') {
+    return word.highlightReading !== undefined ? word.highlightReading : (word.highlight || null);
+  }
+  return word.highlightKanji !== undefined ? word.highlightKanji : (word.highlight || null);
+}
+
+function markNode(text, highlight, fresh, ink) {
+  if (!highlight || !text) return document.createTextNode(text || '');
   const mark = el('span', `mark mark-${highlight}${fresh ? ' is-fresh' : ''}`, text);
+  mark.dataset.ink = ink || '0';
   return mark;
 }
 
@@ -104,6 +122,7 @@ function renderCover(notebook, words, { onEdit, onDelete, freshId }) {
   const meta = el('div', 'cover-meta');
   const metaRow = el('p', 'cover-stats');
   metaRow.append(el('span', '', `${stats.total}語`));
+  metaRow.append(el('span', '', notebook.type === 'katakana' ? 'カタカナ' : '漢字'));
   metaRow.append(el('span', '', `覚えた ${stats.percent}%`));
   const progress = el('div', 'progress');
   progress.setAttribute('aria-hidden', 'true');
@@ -214,13 +233,21 @@ export function renderNotebook(container, options) {
       tools.append(done);
     }
   } else {
+    const translation = el('button', notebook.showTranslation === false ? 'btn btn-ghost' : 'btn btn-ghost is-on', '翻訳');
+    translation.type = 'button';
+    translation.setAttribute('aria-pressed', notebook.showTranslation === false ? 'false' : 'true');
+    translation.addEventListener('click', () => options.onToggleTranslation?.());
+    const lookup = el('button', notebook.autoLookup === false ? 'btn btn-ghost' : 'btn btn-ghost is-on', '自動検索');
+    lookup.type = 'button';
+    lookup.setAttribute('aria-pressed', notebook.autoLookup === false ? 'false' : 'true');
+    lookup.addEventListener('click', () => options.onToggleLookup?.());
     const practice = el('button', 'btn btn-ghost', '練習する');
     practice.type = 'button';
     practice.addEventListener('click', onStartPractice);
     const focus = el('button', 'btn btn-ghost', '集中練習');
     focus.type = 'button';
     focus.addEventListener('click', onStartFocus);
-    tools.append(practice, focus);
+    tools.append(translation, lookup, practice, focus);
   }
 
   const book = el('div', 'book');
@@ -250,6 +277,9 @@ export function renderNotebook(container, options) {
         onHighlight,
         onDeleteWord,
         onEditLine,
+        onEditGloss: options.onEditGloss,
+        onRelookup: options.onRelookup,
+        onKeepGloss: options.onKeepGloss,
         onAdvance,
         onInsertLine,
         onSaveNote,
@@ -349,6 +379,8 @@ function renderPage(options) {
       line.setAttribute('aria-hidden', 'true');
     } else {
       line.classList.add('is-editable');
+      if (notebook?.type === 'katakana') line.classList.add('is-katakana');
+      if (notebook?.showTranslation !== false) line.classList.add('has-gloss');
       if (word && (word.kanji || word.hiragana)) line.classList.add('has-word');
       line.dataset.slot = String(slot);
       if (word?.id) line.dataset.wordId = word.id;
@@ -362,21 +394,27 @@ function renderPage(options) {
 }
 
 function renderWord(word, options) {
-  const { flashWordId, pen, studying, answers, revealed, hints, onHighlight } = options;
+  const { flashWordId, pen, studying, answers, revealed, hints, onHighlight, notebook } = options;
+  const katakana = notebook?.type === 'katakana';
+  const expected = katakana ? word.kanji : word.hiragana;
   const fragment = document.createDocumentFragment();
   const fresh = flashWordId === word.id;
   const kanji = el('span', 'word-kanji hand');
   kanji.translate = false;
-  kanji.append(markNode(word.kanji, word.highlight, fresh));
-  bindPenTarget(kanji, word, pen, onHighlight);
+  if (studying && katakana) {
+    kanji.textContent = practicePrompt(word);
+  } else {
+    kanji.append(markNode(word.kanji, fieldHighlight(word, 'kanji'), fresh, inkVariant(word.id, 'kanji')));
+    bindPenTarget(kanji, word, pen, onHighlight, 'kanji');
+  }
 
   const reading = el('span', 'word-reading hand');
   reading.translate = false;
   if (studying) {
-    reading.append(renderAnswerField(word, answers, revealed, hints));
+    reading.append(renderAnswerField(word, answers, revealed, hints, notebook));
   } else {
-    reading.append(markNode(word.hiragana, word.highlight, fresh));
-    bindPenTarget(reading, word, pen, onHighlight);
+    reading.append(markNode(word.hiragana, fieldHighlight(word, 'reading'), fresh, inkVariant(word.id, 'reading')));
+    bindPenTarget(reading, word, pen, onHighlight, 'reading');
   }
 
   fragment.append(kanji, reading);
@@ -385,10 +423,10 @@ function renderWord(word, options) {
     if (!revealed?.[word.id]) {
       const hint = el('button', 'text-button', 'ヒント');
       hint.type = 'button';
-      hint.addEventListener('click', () => showHint(word, reading, hints));
+      hint.addEventListener('click', () => showHint(reading, hints, word.id, expected));
       const answer = el('button', 'text-button', '答え');
       answer.type = 'button';
-      answer.addEventListener('click', () => showAnswer(word, reading, revealed));
+      answer.addEventListener('click', () => showAnswer(reading, revealed, word.id, expected));
       tools.append(hint, answer);
     }
     fragment.append(tools);
@@ -397,23 +435,29 @@ function renderWord(word, options) {
 }
 
 function renderEditableWord(word, slot, options) {
+  const katakana = options.notebook?.type === 'katakana';
   const fragment = document.createDocumentFragment();
   const kanji = buildPaperField(word, slot, 'kanji', options);
-  const reading = buildPaperField(word, slot, 'hiragana', options);
-  fragment.append(kanji, reading, buildLineTools(word, slot, options));
+  const reading = katakana ? null : buildPaperField(word, slot, 'hiragana', options);
+  const gloss = buildGloss(word, slot, options);
+  if (reading) fragment.append(kanji, reading, buildLineTools(word, slot, options), gloss);
+  else fragment.append(kanji, buildLineTools(word, slot, options), gloss);
   bindPaperLine(kanji, reading, slot, options);
   return fragment;
 }
 
 function buildPaperField(word, slot, field, options) {
   const { flashWordId, pen } = options;
+  const katakana = options.notebook?.type === 'katakana';
   const value = field === 'kanji' ? (word?.kanji || '') : (word?.hiragana || '');
   const cell = el('span', field === 'kanji' ? 'word-kanji hand' : 'word-reading hand');
   cell.translate = false;
   const wrap = el('span', 'paper-field');
   const fresh = flashWordId && flashWordId === word?.id;
-  if (word?.highlight && value) {
-    wrap.classList.add('mark', `mark-${word.highlight}`);
+  const highlight = fieldHighlight(word, field);
+  if (highlight && value) {
+    wrap.classList.add('mark', `mark-${highlight}`);
+    wrap.dataset.ink = inkVariant(word?.id, field);
     if (fresh) wrap.classList.add('is-fresh');
   }
   const input = document.createElement('input');
@@ -428,7 +472,10 @@ function buildPaperField(word, slot, field, options) {
   input.maxLength = field === 'kanji' ? 40 : 80;
   input.dataset.field = field;
   input.value = value;
-  input.setAttribute('aria-label', `${slot + 1}行目の${field === 'kanji' ? '漢字・単語' : 'ひらがな'}`);
+  const label = field === 'kanji'
+    ? (katakana ? 'カタカナ' : '漢字・単語')
+    : 'ひらがな';
+  input.setAttribute('aria-label', `${slot + 1}行目の${label}`);
   if (pen?.active) input.readOnly = true;
   fitPaperInput(input);
   wrap.append(input);
@@ -444,9 +491,105 @@ function buildPaperField(word, slot, field, options) {
   });
   cell.addEventListener('click', () => {
     if (!pen?.active || !pen.tool || !word?.id) return;
-    options.onHighlight?.(word.id, pen.tool === 'erase' ? null : pen.tool);
+    options.onHighlight?.(word.id, pen.tool === 'erase' ? null : pen.tool, field);
   });
   return cell;
+}
+
+function buildGloss(word, slot, options) {
+  const gloss = el('div', 'line-gloss');
+  if (options.notebook?.showTranslation === false) gloss.hidden = true;
+  const katakana = options.notebook?.type === 'katakana';
+  if (katakana) {
+    gloss.append(
+      glossInput(word?.originWord || '', '原文', 'origin', word?.originLanguage || ''),
+      el('span', 'gloss-paren', '（'),
+      glossInput(word?.translation || '', '訳', 'translation', ''),
+      el('span', 'gloss-paren', '）'),
+    );
+  } else {
+    gloss.append(glossInput(word?.translation || '', '訳', 'translation', ''));
+  }
+  gloss.querySelectorAll('.gloss-input').forEach((input) => bindGlossInput(input, slot, options));
+  if (word?.glossStale && options.notebook?.showTranslation !== false) {
+    const again = el('button', 'gloss-action', '再検索');
+    again.type = 'button';
+    again.tabIndex = -1;
+    again.addEventListener('click', () => options.onRelookup?.(slot));
+    const keep = el('button', 'gloss-action', 'このまま');
+    keep.type = 'button';
+    keep.tabIndex = -1;
+    keep.addEventListener('click', () => options.onKeepGloss?.(slot));
+    gloss.append(again, keep);
+  }
+  return gloss;
+}
+
+function glossInput(value, placeholder, field, language) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'gloss-input hand';
+  input.lang = field === 'origin' ? 'en' : 'zh-Hant';
+  input.autocomplete = 'off';
+  input.autocapitalize = 'off';
+  input.spellcheck = false;
+  input.placeholder = placeholder;
+  input.maxLength = 80;
+  input.dataset.field = field;
+  input.value = value;
+  input.setAttribute('aria-label', placeholder);
+  if (language) input.title = language;
+  fitPaperInput(input);
+  return input;
+}
+
+function bindGlossInput(input, slot, options) {
+  let composing = false;
+  const emit = () => {
+    if (composing) return;
+    options.onEditGloss?.({ slot, field: input.dataset.field, value: input.value });
+  };
+  input.addEventListener('compositionstart', () => {
+    composing = true;
+  });
+  input.addEventListener('compositionend', () => {
+    composing = false;
+    fitPaperInput(input);
+    emit();
+  });
+  input.addEventListener('input', (event) => {
+    fitPaperInput(input);
+    if (composing || event.isComposing) return;
+    emit();
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.isComposing || composing || event.keyCode === 229) return;
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    emit();
+    const next = input.dataset.field === 'origin'
+      ? input.parentElement?.querySelector('[data-field="translation"]')
+      : document.querySelector(`[data-slot="${slot + 1}"] [data-field="kanji"]`);
+    next?.focus();
+  });
+}
+
+export function syncPaperLine(word) {
+  if (!word?.id || typeof CSS === 'undefined') return;
+  const line = document.querySelector(`[data-word-id="${CSS.escape(word.id)}"]`);
+  if (!line) return;
+  [
+    ['hiragana', word.hiragana || ''],
+    ['translation', word.translation || ''],
+    ['origin', word.originWord || ''],
+  ].forEach(([field, value]) => {
+    const input = line.querySelector(`[data-field="${field}"]`);
+    if (!(input instanceof HTMLInputElement) || document.activeElement === input) return;
+    if (input.value === value) return;
+    input.value = value;
+    fitPaperInput(input);
+    if (field === 'origin' && word.originLanguage) input.title = word.originLanguage;
+  });
 }
 
 function fitPaperInput(input) {
@@ -456,17 +599,17 @@ function fitPaperInput(input) {
 
 function bindPaperLine(kanjiCell, readingCell, slot, options) {
   const kanji = kanjiCell.querySelector('input');
-  const reading = readingCell.querySelector('input');
+  const reading = readingCell?.querySelector('input') || null;
   let composing = false;
   const emit = () => {
     if (composing) return;
     options.onEditLine?.({
       slot,
       kanji: kanji.value,
-      hiragana: reading.value,
+      hiragana: reading ? reading.value : '',
     });
   };
-  [kanji, reading].forEach((input) => {
+  [kanji, reading].filter(Boolean).forEach((input) => {
     input.addEventListener('compositionstart', () => {
       composing = true;
     });
@@ -477,6 +620,9 @@ function bindPaperLine(kanjiCell, readingCell, slot, options) {
     });
     input.addEventListener('input', (event) => {
       fitPaperInput(input);
+      const line = input.closest('.word-line');
+      const hasText = kanji.value.trim() || (reading?.value.trim() || '');
+      line?.classList.toggle('has-word', Boolean(hasText) || Boolean(line?.dataset.wordId));
       if (composing || event.isComposing) return;
       emit();
     });
@@ -486,7 +632,7 @@ function bindPaperLine(kanjiCell, readingCell, slot, options) {
       if (event.key !== 'Enter') return;
       event.preventDefault();
       emit();
-      if (input.dataset.field === 'kanji') {
+      if (input.dataset.field === 'kanji' && reading) {
         reading.focus();
         return;
       }
@@ -496,7 +642,7 @@ function bindPaperLine(kanjiCell, readingCell, slot, options) {
         return;
       }
       const line = input.closest('.word-line');
-      const hasText = kanji.value.trim() || reading.value.trim() || line?.dataset.wordId;
+      const hasText = kanji.value.trim() || (reading?.value.trim() || '') || line?.dataset.wordId;
       if (hasText) options.onAdvance?.(slot + 1);
     });
   });
@@ -586,10 +732,11 @@ function toggleRowMenu(button, slot, options) {
   const remove = menuButton('この行を削除', () => options.onDeleteWord?.(slot));
   const insert = menuButton('下に行を追加', () => options.onInsertLine?.(slot));
   const note = menuButton('メモを編集', () => openNotePopover(button, slot, options));
-  menu.append(remove, insert, note);
+  const again = menuButton('翻訳を再検索', () => options.onRelookup?.(slot));
+  menu.append(remove, insert, note, again);
   document.body.append(menu);
   const rect = button.getBoundingClientRect();
-  const width = 168;
+  const width = 196;
   menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 150)}px`;
   menu.style.left = `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`;
 }
@@ -668,15 +815,18 @@ function openNotePopover(anchor, slot, options) {
   area.focus();
 }
 
-function bindPenTarget(node, word, pen, onHighlight) {
+function bindPenTarget(node, word, pen, onHighlight, field) {
   node.addEventListener('click', () => {
     if (!pen?.active || !pen.tool) return;
     if (window.getSelection?.()?.toString()) return;
-    onHighlight(word.id, pen.tool === 'erase' ? null : pen.tool);
+    onHighlight(word.id, pen.tool === 'erase' ? null : pen.tool, field);
   });
 }
 
-function renderAnswerField(word, answers, revealed, hints) {
+function renderAnswerField(word, answers, revealed, hints, notebook) {
+  const katakana = notebook?.type === 'katakana';
+  const expected = katakana ? word.kanji : word.hiragana;
+  const script = katakana ? 'katakana' : 'hiragana';
   const saved = answers?.[word.id];
   const field = el('span', 'answer-field');
   const input = document.createElement('input');
@@ -687,30 +837,31 @@ function renderAnswerField(word, answers, revealed, hints) {
   input.autocapitalize = 'off';
   input.spellcheck = false;
   input.enterKeyHint = 'done';
-  input.setAttribute('aria-label', `${word.kanji}のひらがな`);
+  input.setAttribute('aria-label', katakana ? 'カタカナ' : `${word.kanji}のひらがな`);
   input.dataset.wordInput = word.id;
   if (saved?.value) input.value = saved.value;
   const judge = el('span', 'judge');
   judge.setAttribute('aria-live', 'polite');
   field.append(input, judge);
-  if (revealed?.[word.id]) field.append(el('span', 'revealed hand', word.hiragana));
-  else if (hints?.[word.id]) field.append(el('span', 'hint hand', [...word.hiragana][0] || ''));
-  bindAnswerInput(input, judge, word, answers);
-  if (saved?.status) paintJudgement(input, judge, { status: saved.status });
+  if (revealed?.[word.id]) field.append(el('span', 'revealed hand', expected));
+  else if (hints?.[word.id]) field.append(el('span', 'hint hand', [...expected][0] || ''));
+  bindAnswerInput(input, judge, word, answers, { expected, script });
+  if (saved?.status) paintJudgement(input, judge, { status: saved.status, message: saved.message || '' });
   return field;
 }
 
-function bindAnswerInput(input, judge, word, answers) {
+function bindAnswerInput(input, judge, word, answers, { expected, script }) {
   let composing = false;
   let timer = 0;
   const run = () => {
     if (composing) return;
-    const result = judgeAnswer(input.value, word.hiragana, { composing: false });
+    const result = judgeAnswer(input.value, expected, { composing: false, script });
     paintJudgement(input, judge, result);
     if (answers) {
       answers[word.id] = {
         value: input.value,
         status: result.status === 'empty' ? '' : result.status,
+        message: result.message || '',
       };
     }
   };
@@ -752,27 +903,27 @@ function paintJudgement(input, judge, result) {
   if (result.status === 'incorrect' || result.status === 'katakana' || result.status === 'invalid') {
     input.classList.add('is-incorrect');
     judge.classList.add('is-incorrect');
-    judge.textContent = result.status === 'incorrect' ? '✕' : '✕ ひらがなで';
+    judge.textContent = result.status === 'incorrect' ? '✕' : `✕ ${result.message || 'ひらがなで'}`;
     return;
   }
   judge.textContent = '';
 }
 
-function showHint(word, reading, hints) {
+function showHint(reading, hints, wordId, expected) {
   if (reading.querySelector('.hint')) return;
   const field = reading.querySelector('.answer-field');
   if (!field || field.querySelector('.revealed')) return;
-  field.append(el('span', 'hint hand', [...word.hiragana][0] || ''));
-  if (hints) hints[word.id] = true;
+  field.append(el('span', 'hint hand', [...expected][0] || ''));
+  if (hints) hints[wordId] = true;
 }
 
-function showAnswer(word, reading, revealed) {
+function showAnswer(reading, revealed, wordId, expected) {
   const field = reading.querySelector('.answer-field');
   field?.querySelector('.hint')?.remove();
   if (field && !field.querySelector('.revealed')) {
-    field.append(el('span', 'revealed hand', word.hiragana));
+    field.append(el('span', 'revealed hand', expected));
   }
-  if (revealed) revealed[word.id] = true;
+  if (revealed) revealed[wordId] = true;
   reading.closest('.word-line')?.querySelector('.answer-tools')?.remove();
 }
 
@@ -802,9 +953,12 @@ function renderPracticeResult(words, answers, { onRetry, onReview, onExitStudy }
 function renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, onFocusDraft }) {
   const wordId = study.wordIds[study.index];
   const word = study.wordsById[wordId];
+  const katakana = study.script === 'katakana';
+  const prompt = katakana ? practicePrompt(word) : (word?.kanji || '');
+  const expected = katakana ? (word?.kanji || '') : (word?.hiragana || '');
   const sheet = el('article', 'page focus-sheet');
   sheet.append(el('p', 'focus-count', `${study.index + 1} / ${study.wordIds.length}`));
-  const kanji = el('p', 'focus-kanji hand', word?.kanji || '');
+  const kanji = el('p', 'focus-kanji hand', prompt);
   kanji.translate = false;
   const input = document.createElement('input');
   input.type = 'text';
@@ -814,24 +968,24 @@ function renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, o
   input.autocapitalize = 'off';
   input.spellcheck = false;
   input.enterKeyHint = 'done';
-  input.setAttribute('aria-label', `${word?.kanji || ''}のひらがな`);
+  input.setAttribute('aria-label', katakana ? 'カタカナ' : `${prompt}のひらがな`);
   input.dataset.focusInput = 'true';
   input.value = focusDraft || '';
   const judge = el('span', 'judge');
   judge.setAttribute('aria-live', 'polite');
   sheet.append(kanji, input, judge);
-  bindFocusInput(input, judge, word, { onFocusCorrect, onFocusWrong, onFocusDraft });
+  bindFocusInput(input, judge, { expected, script: katakana ? 'katakana' : 'hiragana' }, { onFocusCorrect, onFocusWrong, onFocusDraft });
   queueMicrotask(() => input.focus());
   return sheet;
 }
 
-function bindFocusInput(input, judge, word, { onFocusCorrect, onFocusWrong, onFocusDraft }) {
+function bindFocusInput(input, judge, { expected, script }, { onFocusCorrect, onFocusWrong, onFocusDraft }) {
   let composing = false;
   let timer = 0;
   let lastValue = '';
   const run = () => {
-    if (composing || !word) return;
-    const result = judgeAnswer(input.value, word.hiragana, { composing: false });
+    if (composing) return;
+    const result = judgeAnswer(input.value, expected, { composing: false, script });
     if (result.status === 'empty') {
       paintJudgement(input, judge, result);
       lastValue = '';

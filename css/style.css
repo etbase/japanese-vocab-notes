@@ -98,6 +98,17 @@ svg {
   margin: 0 auto;
 }
 
+.site-note {
+  margin: 8px auto 20px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.site-note a {
+  color: inherit;
+}
+
 .skip-link {
   position: absolute;
   left: 12px;
@@ -236,6 +247,11 @@ main {
 
 .btn-ghost:hover {
   background: var(--paper);
+}
+
+.btn.is-on {
+  border-color: var(--sage-deep);
+  background: #f3efe4;
 }
 
 .btn-danger {
@@ -380,9 +396,25 @@ main {
   font-size: 13px;
 }
 
-.color-field {
+.color-field,
+.choice-field {
   margin-top: 16px;
   border: 0;
+  padding: 0;
+}
+
+.choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  cursor: pointer;
 }
 
 .color-field legend {

@@ -1,17 +1,22 @@
 /** 練習判定。畫面在後續階段接上；這裡先固定規則，避免提早在 IME 組字時判錯。 */
 
-import { hasKatakana, isHiragana, normalizeText } from './vocabulary.js';
+import { hasKatakana, isHiragana, isKatakana, normalizeText } from './vocabulary.js';
 
-export function judgeAnswer(raw, expected, { composing = false } = {}) {
+export function judgeAnswer(raw, expected, { composing = false, script = 'hiragana' } = {}) {
   if (composing) return { status: 'pending' };
   const input = normalizeText(raw);
   const answer = normalizeText(expected);
   if (!input) return { status: 'empty' };
+  if (script === 'katakana') {
+    if (!isKatakana(input)) return { status: 'invalid', message: 'カタカナで' };
+    if (input === answer) return { status: 'correct' };
+    return { status: 'incorrect' };
+  }
   if (hasKatakana(input)) {
-    return { status: 'katakana', message: 'ひらがなで入力してください' };
+    return { status: 'katakana', message: 'ひらがなで' };
   }
   if (!isHiragana(input)) {
-    return { status: 'invalid', message: 'ひらがなで入力してください' };
+    return { status: 'invalid', message: 'ひらがなで' };
   }
   if (input === answer) return { status: 'correct' };
   return { status: 'incorrect' };

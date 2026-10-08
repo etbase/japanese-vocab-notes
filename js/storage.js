@@ -72,6 +72,9 @@ function cleanNotebook(input) {
     id,
     title,
     color: cleanColor(input.color),
+    type: input.type === 'katakana' ? 'katakana' : 'kanji',
+    autoLookup: input.autoLookup === undefined ? true : Boolean(input.autoLookup),
+    showTranslation: input.showTranslation === undefined ? true : Boolean(input.showTranslation),
     createdAt,
     updatedAt: String(input.updatedAt || createdAt),
   };
@@ -85,7 +88,13 @@ function cleanWord(input, { strict = false } = {}) {
   const hiragana = normalizeText(input.hiragana).slice(0, 80);
   if (!id || !notebookId) return null;
   if (strict && hiragana && !isHiragana(hiragana)) return null;
-  const highlight = HIGHLIGHTS.has(input.highlight) ? input.highlight : null;
+  const legacyHighlight = HIGHLIGHTS.has(input.highlight) ? input.highlight : null;
+  const highlightKanji = input.highlightKanji === undefined
+    ? legacyHighlight
+    : (HIGHLIGHTS.has(input.highlightKanji) ? input.highlightKanji : null);
+  const highlightReading = input.highlightReading === undefined
+    ? legacyHighlight
+    : (HIGHLIGHTS.has(input.highlightReading) ? input.highlightReading : null);
   const createdAt = String(input.createdAt || nowIso());
   const order = Number.isFinite(input.order) ? Math.max(0, Math.floor(input.order)) : 0;
   return {
@@ -94,7 +103,17 @@ function cleanWord(input, { strict = false } = {}) {
     kanji,
     hiragana,
     note: String(input.note ?? '').slice(0, 500),
-    highlight,
+    translation: String(input.translation ?? '').slice(0, 80),
+    translationEdited: Boolean(input.translationEdited),
+    originWord: String(input.originWord ?? '').slice(0, 80),
+    originLanguage: String(input.originLanguage ?? '').slice(0, 40),
+    originEdited: Boolean(input.originEdited),
+    readingEdited: Boolean(input.readingEdited),
+    glossStale: Boolean(input.glossStale),
+    lookupKey: String(input.lookupKey ?? '').slice(0, 40),
+    highlight: highlightKanji,
+    highlightKanji,
+    highlightReading,
     order,
     createdAt,
     updatedAt: String(input.updatedAt || createdAt),
@@ -237,12 +256,15 @@ export function getWordsByNotebook(notebookId) {
     .sort((a, b) => a.order - b.order || String(a.createdAt).localeCompare(String(b.createdAt)));
 }
 
-export async function createNotebook({ title, color }) {
+export async function createNotebook({ title, color, type, autoLookup, showTranslation }) {
   const state = load();
   const notebook = cleanNotebook({
     id: createId(),
     title,
     color,
+    type,
+    autoLookup,
+    showTranslation,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   });
@@ -260,6 +282,9 @@ export async function updateNotebook(id, patch) {
     ...current,
     title: patch.title ?? current.title,
     color: patch.color ?? current.color,
+    type: patch.type === undefined ? current.type : patch.type,
+    autoLookup: patch.autoLookup === undefined ? current.autoLookup : patch.autoLookup,
+    showTranslation: patch.showTranslation === undefined ? current.showTranslation : patch.showTranslation,
     updatedAt: nowIso(),
   });
   if (!next) return { ok: false, message: 'ノートの名前を入力してください' };
@@ -325,18 +350,7 @@ export async function updateWord(wordId, patch) {
   const state = load();
   const current = state.words.find((word) => word.id === wordId);
   if (!current) return { ok: false, message: '単語が見つかりません' };
-  const nextHiragana = patch.hiragana === undefined ? current.hiragana : normalizeText(patch.hiragana);
-  const next = cleanWord(
-    {
-      ...current,
-      kanji: patch.kanji === undefined ? current.kanji : patch.kanji,
-      hiragana: nextHiragana,
-      note: patch.note === undefined ? current.note : patch.note,
-      highlight: patch.highlight === undefined ? current.highlight : patch.highlight,
-      updatedAt: nowIso(),
-    },
-    { strict: false },
-  );
+  const next = cleanWord(wordPatch(current, patch, nowIso()), { strict: false });
   if (!next) return { ok: false, message: '単語を入力してください' };
   Object.assign(current, next);
   persist();
@@ -386,14 +400,7 @@ export async function ensureWordAt(notebookId, index, patch = {}) {
   }
   const current = list[target];
   const next = cleanWord(
-    {
-      ...current,
-      kanji: patch.kanji === undefined ? current.kanji : patch.kanji,
-      hiragana: hiragana === undefined ? current.hiragana : hiragana,
-      note: patch.note === undefined ? current.note : patch.note,
-      highlight: patch.highlight === undefined ? current.highlight : patch.highlight,
-      updatedAt: timestamp,
-    },
+    wordPatch(current, hiragana === undefined ? patch : { ...patch, hiragana }, timestamp),
     { strict: false },
   );
   if (!next) return { ok: false, message: '保存できませんでした' };
@@ -430,12 +437,35 @@ export async function deleteWord(wordId) {
   return { ok: true };
 }
 
-export async function setHighlight(wordId, color) {
+function wordPatch(current, patch, timestamp) {
+  const pick = (key) => (patch[key] === undefined ? current[key] : patch[key]);
+  return {
+    ...current,
+    kanji: pick('kanji'),
+    hiragana: patch.hiragana === undefined ? current.hiragana : normalizeText(patch.hiragana),
+    note: pick('note'),
+    translation: pick('translation'),
+    translationEdited: pick('translationEdited'),
+    originWord: pick('originWord'),
+    originLanguage: pick('originLanguage'),
+    originEdited: pick('originEdited'),
+    readingEdited: pick('readingEdited'),
+    glossStale: pick('glossStale'),
+    lookupKey: pick('lookupKey'),
+    highlight: pick('highlight'),
+    highlightKanji: pick('highlightKanji'),
+    highlightReading: pick('highlightReading'),
+    updatedAt: timestamp,
+  };
+}
+
+export async function setHighlight(wordId, color, field = 'kanji') {
   const highlight = color == null || color === '' ? null : color;
   if (highlight !== null && !HIGHLIGHTS.has(highlight)) {
     return { ok: false, message: 'マーカーの色が正しくありません' };
   }
-  return updateWord(wordId, { highlight });
+  if (field === 'reading') return updateWord(wordId, { highlightReading: highlight });
+  return updateWord(wordId, { highlight, highlightKanji: highlight });
 }
 
 export async function addPracticeLog(entry) {

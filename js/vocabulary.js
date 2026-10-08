@@ -14,8 +14,24 @@ export function isHiragana(value) {
   return text.length > 0 && HIRAGANA_RE.test(text);
 }
 
+const KATAKANA_RE = /^[\u30a1-\u30fa\u30fc\u30fd\u30fe]+$/u;
+
 export function hasKatakana(value) {
   return KATAKANA_LETTER_RE.test(normalizeText(value));
+}
+
+export function isKatakana(value) {
+  const text = normalizeText(value);
+  return text.length > 0 && KATAKANA_RE.test(text);
+}
+
+export function practicePrompt(word) {
+  const origin = String(word?.originWord ?? '').trim();
+  const translation = String(word?.translation ?? '').trim();
+  if (origin && translation) return `${origin}（${translation}）`;
+  if (origin) return origin;
+  if (translation) return translation;
+  return '';
 }
 
 export function sortWords(words) {
