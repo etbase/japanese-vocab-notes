@@ -118,7 +118,14 @@ function focusPending() {
   const selector = state.focusSelector;
   state.focusSelector = null;
   const target = document.querySelector(selector);
-  if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+  if (!(target instanceof HTMLElement)) return;
+  const options = { preventScroll: true };
+  if (target.id === 'notebook-title' || target.classList.contains('cover-open')) options.focusVisible = false;
+  try {
+    target.focus(options);
+  } catch {
+    target.focus({ preventScroll: true });
+  }
   if (target instanceof HTMLInputElement) {
     const end = target.value.length;
     target.setSelectionRange(end, end);
@@ -1186,6 +1193,9 @@ function bindChrome() {
 function bindKeys() {
   document.addEventListener('pointerdown', (event) => {
     const target = event.target;
+    if (document.activeElement?.id === 'notebook-title' && !(target instanceof Element && target.closest('#notebook-title'))) {
+      document.activeElement.blur();
+    }
     if (target instanceof Element && target.closest('.row-more, .row-popover, .note-popover, .note-dot, .note-tip')) return;
     closeLineMenus();
   });

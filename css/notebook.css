@@ -49,7 +49,7 @@
   outline: none;
 }
 
-.notebook-card:focus-within .cover {
+.notebook-card:has(.cover-open:focus-visible) .cover {
   outline: 2px solid var(--sage-deep);
   outline-offset: 3px;
 }
@@ -215,6 +215,10 @@
   overflow-wrap: anywhere;
 }
 
+#notebook-title:focus {
+  outline: none;
+}
+
 .notebook-summary {
   margin-top: 4px;
   color: var(--ink-soft);
@@ -339,10 +343,19 @@
   max-width: 100%;
   overflow: hidden;
   color: #8d8174;
-  font-family: var(--font-hand);
   font-size: 15px;
   font-weight: 400;
   line-height: 1.15;
+}
+
+.line-origin {
+  font-family: var(--font-hand);
+}
+
+.vocab-translation,
+.vocab-translation .gloss-input {
+  font-family: var(--font-zh);
+  font-weight: 400;
 }
 
 .line-gloss.has-gloss-view {
@@ -1040,6 +1053,56 @@
   width: min(280px, 100%);
   font-size: 22px;
   text-align: center;
+}
+
+.focus-field {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: min(280px, 100%);
+  max-width: 100%;
+}
+
+.focus-field .answer-field,
+.focus-field .focus-input {
+  width: 100%;
+}
+
+.focus-reveal {
+  max-width: 100%;
+  border: 1px solid var(--milk);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.focus-reveal:hover {
+  background: #fff;
+}
+
+.focus-expected {
+  margin: 0;
+  max-width: 100%;
+  color: #4f7d4a;
+  font-size: 16px;
+  line-height: 1.45;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.focus-expected .hand,
+.focus-expected .vocab-translation {
+  color: var(--ink);
+}
+
+.focus-field .judge {
+  min-height: 1em;
+  text-align: center;
+}
+
+.focus-field .judge:empty {
+  display: none;
 }
 
 .result-panel {

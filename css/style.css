@@ -13,6 +13,7 @@
   --cover: #C5D5C2;
   --row-h: 46px;
   --font-hand: "Klee One", "Yomogi", "Zen Kurenaido", "Hiragino Maru Gothic ProN", "Yu Gothic", "Noto Sans JP", sans-serif;
+  --font-zh: "LXGW WenKai TC", "Noto Serif TC", "PingFang TC", "Microsoft JhengHei", serif;
   --font-ui: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", "PingFang TC", "Microsoft JhengHei", sans-serif;
   color-scheme: light;
 }

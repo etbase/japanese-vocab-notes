@@ -412,26 +412,28 @@ function renderWord(word, options) {
   }
 
   fragment.append(kanji, reading);
-  if (studying) fragment.append(renderAnswerTools(word, revealed, expected));
+  if (studying) fragment.append(renderAnswerTools(word, revealed, expected, script));
   return fragment;
 }
 
-function renderAnswerTools(word, revealed, expected) {
+function renderAnswerTools(word, revealed, expected, script) {
   const tools = el('div', 'answer-tools');
   if (revealed?.[word.id]) {
-    tools.append(revealedLabel(expected));
+    tools.append(revealedLabel(expected, script));
     return tools;
   }
   const answer = el('button', 'text-button', '答え');
   answer.type = 'button';
   answer.addEventListener('mousedown', (event) => event.preventDefault());
-  answer.addEventListener('click', () => showAnswer(answer.closest('.word-line'), revealed, word.id, expected));
+  answer.addEventListener('click', () => showAnswer(answer.closest('.word-line'), revealed, word.id, expected, script));
   tools.append(answer);
   return tools;
 }
 
-function revealedLabel(expected) {
-  const label = el('span', 'revealed hand', expected);
+function revealedLabel(expected, script) {
+  const chinese = script === 'zh';
+  const label = el('span', chinese ? 'revealed vocab-translation' : 'revealed hand', expected);
+  if (chinese) label.lang = 'zh-Hant';
   label.title = expected;
   return label;
 }
@@ -443,7 +445,8 @@ function renderPracticePrompt(word, script) {
     return prompt;
   }
   const block = el('span', 'practice-prompt');
-  const meaning = el('span', 'practice-meaning', word?.translation || '');
+  const meaning = el('span', 'practice-meaning vocab-translation', word?.translation || '');
+  meaning.lang = 'zh-Hant';
   block.append(meaning);
   if (word?.originWord) block.append(el('span', 'practice-origin', word.originWord));
   return block;
@@ -528,7 +531,8 @@ function buildGlossField(word, slot, field, options) {
   const input = glossInput(value, label, field, field === 'origin' ? (word?.originLanguage || '') : '');
   if (concealed) input.tabIndex = -1;
   if (field === 'translation') {
-    cell.classList.add('has-gloss-view');
+    cell.classList.add('has-gloss-view', 'vocab-translation');
+    cell.lang = 'zh-Hant';
     cell.append(el('span', 'gloss-view'));
   }
   cell.append(input);
@@ -1194,10 +1198,10 @@ function paintJudgement(input, judge, result) {
   judge.textContent = '';
 }
 
-function showAnswer(line, revealed, wordId, expected) {
+function showAnswer(line, revealed, wordId, expected, script) {
   const tools = line?.querySelector('.answer-tools');
   if (!tools || tools.querySelector('.revealed')) return;
-  tools.replaceChildren(revealedLabel(expected));
+  tools.replaceChildren(revealedLabel(expected, script));
   if (revealed) revealed[wordId] = true;
 }
 
@@ -1249,9 +1253,30 @@ function renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, o
   input.value = focusDraft || '';
   const judge = el('span', 'judge');
   judge.setAttribute('aria-live', 'polite');
-  sheet.append(kanji, input, judge);
+  const field = el('div', 'focus-field');
+  const entry = el('div', 'answer-field');
+  entry.append(input);
+  const answer = el('p', 'focus-expected');
+  answer.id = 'focus-expected';
+  answer.hidden = true;
+  const answerText = el('span', script === 'zh' ? 'vocab-translation' : 'hand', expected);
+  if (script === 'zh') answerText.lang = 'zh-Hant';
+  answer.append(document.createTextNode('正解：'), answerText);
+  const reveal = el('button', 'btn focus-reveal', '答えを見る');
+  reveal.type = 'button';
+  reveal.setAttribute('aria-expanded', 'false');
+  reveal.setAttribute('aria-controls', 'focus-expected');
+  reveal.addEventListener('mousedown', (event) => event.preventDefault());
+  reveal.addEventListener('click', () => {
+    const open = answer.hidden;
+    answer.hidden = !open;
+    reveal.textContent = open ? '答えを隠す' : '答えを見る';
+    reveal.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+  field.append(entry, reveal, answer, judge);
+  sheet.append(kanji, field);
   bindFocusInput(input, judge, { expected, script }, { onFocusCorrect, onFocusWrong, onFocusDraft });
-  queueMicrotask(() => input.focus());
+  queueMicrotask(() => input.focus({ focusVisible: false }));
   return sheet;
 }
 
