@@ -404,24 +404,35 @@ function renderWord(word, options) {
   const reading = el('span', 'word-reading hand');
   reading.translate = false;
   if (studying) {
-    reading.append(renderAnswerField(word, answers, revealed, notebook, script));
+    reading.append(renderAnswerField(word, answers, notebook, script));
   } else {
     reading.append(markNode(word.hiragana, fieldHighlight(word, 'reading'), fresh, inkVariant(word.id, 'reading')));
     bindPenTarget(reading, word, pen, onHighlight, 'reading');
   }
 
   fragment.append(kanji, reading);
-  if (studying) {
-    const tools = el('div', 'answer-tools');
-    if (!revealed?.[word.id]) {
-      const answer = el('button', 'text-button', '答え');
-      answer.type = 'button';
-      answer.addEventListener('click', () => showAnswer(reading, revealed, word.id, expected));
-      tools.append(answer);
-    }
-    fragment.append(tools);
-  }
+  if (studying) fragment.append(renderAnswerTools(word, revealed, expected));
   return fragment;
+}
+
+function renderAnswerTools(word, revealed, expected) {
+  const tools = el('div', 'answer-tools');
+  if (revealed?.[word.id]) {
+    tools.append(revealedLabel(expected));
+    return tools;
+  }
+  const answer = el('button', 'text-button', '答え');
+  answer.type = 'button';
+  answer.addEventListener('mousedown', (event) => event.preventDefault());
+  answer.addEventListener('click', () => showAnswer(answer.closest('.word-line'), revealed, word.id, expected));
+  tools.append(answer);
+  return tools;
+}
+
+function revealedLabel(expected) {
+  const label = el('span', 'revealed hand', expected);
+  label.title = expected;
+  return label;
 }
 
 function renderPracticePrompt(word, script) {
@@ -914,7 +925,7 @@ function bindPenTarget(node, word, pen, onHighlight, field) {
   });
 }
 
-function renderAnswerField(word, answers, revealed, notebook, script) {
+function renderAnswerField(word, answers, notebook, script) {
   const answerScript = script || (notebook?.type === 'katakana' ? 'katakana' : 'hiragana');
   const expected = answerScript === 'zh'
     ? (word.translation || '')
@@ -936,7 +947,6 @@ function renderAnswerField(word, answers, revealed, notebook, script) {
   const judge = el('span', 'judge');
   judge.setAttribute('aria-live', 'polite');
   field.append(input, judge);
-  if (revealed?.[word.id]) field.append(el('span', 'revealed hand', expected));
   bindAnswerInput(input, judge, word, answers, { expected, script: answerScript });
   if (saved?.status) paintJudgement(input, judge, { status: saved.status, message: saved.message || '' });
   return field;
@@ -1002,13 +1012,11 @@ function paintJudgement(input, judge, result) {
   judge.textContent = '';
 }
 
-function showAnswer(reading, revealed, wordId, expected) {
-  const field = reading.querySelector('.answer-field');
-  if (field && !field.querySelector('.revealed')) {
-    field.append(el('span', 'revealed hand', expected));
-  }
+function showAnswer(line, revealed, wordId, expected) {
+  const tools = line?.querySelector('.answer-tools');
+  if (!tools || tools.querySelector('.revealed')) return;
+  tools.replaceChildren(revealedLabel(expected));
   if (revealed) revealed[wordId] = true;
-  reading.closest('.word-line')?.querySelector('.answer-tools')?.remove();
 }
 
 function renderPracticeResult(words, answers, { onRetry, onReview, onExitStudy }) {
