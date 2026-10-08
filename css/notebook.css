@@ -336,12 +336,41 @@
   display: flex;
   align-items: center;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   color: #8d8174;
   font-family: var(--font-hand);
   font-size: 15px;
   font-weight: 400;
-  line-height: 1.2;
+  line-height: 1.15;
+}
+
+.line-gloss.has-gloss-view {
+  position: relative;
+  min-height: 22px;
+  max-height: 100%;
+}
+
+.gloss-view {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  max-height: 100%;
+  overflow: hidden;
+  font: inherit;
+  line-height: 1.15;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.gloss-line {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .line-gloss.is-concealed,
@@ -351,6 +380,7 @@
 }
 
 .gloss-input {
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -369,6 +399,24 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   caret-color: var(--ink);
+}
+
+.line-gloss.has-gloss-view .gloss-input {
+  position: absolute;
+  inset: 0;
+  height: auto;
+  margin: 0;
+  opacity: 0;
+}
+
+.line-gloss.has-gloss-view .gloss-input:focus {
+  height: 22px;
+  margin: auto 0;
+  opacity: 1;
+}
+
+.line-gloss.has-gloss-view:focus-within .gloss-view {
+  visibility: hidden;
 }
 
 .gloss-input:focus {
@@ -442,15 +490,18 @@
 
 .paper-field {
   display: inline-block;
+  min-width: 0;
   max-width: 100%;
   vertical-align: middle;
 }
 
 .paper-input {
+  box-sizing: border-box;
   display: inline-block;
   max-width: 100%;
   margin: 0;
   padding: 0 1px;
+  overflow: hidden;
   border: 0;
   border-radius: 0;
   outline: none;
@@ -458,14 +509,18 @@
   box-shadow: none;
   color: inherit;
   font: inherit;
-  line-height: inherit;
+  line-height: 1.15;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   caret-color: var(--ink);
 }
 
 .paper-input:focus {
   outline: none;
+  overflow: auto;
   background: rgba(168, 185, 165, 0.22);
   box-shadow: inset 0 -1px 0 rgba(73, 68, 62, 0.28);
+  text-overflow: clip;
 }
 
 .paper-input.is-invalid {

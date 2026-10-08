@@ -313,6 +313,7 @@ export function renderNotebook(container, options) {
     screen.append(renderPracticeResult(visibleWords, answers, { onRetry, onReview, onExitStudy }));
   }
   container.replaceChildren(screen);
+  scheduleNotebookFit(screen);
   return view;
 }
 
@@ -526,6 +527,10 @@ function buildGlossField(word, slot, field, options) {
   const label = field === 'origin' ? '原文' : '中国語';
   const input = glossInput(value, label, field, field === 'origin' ? (word?.originLanguage || '') : '');
   if (concealed) input.tabIndex = -1;
+  if (field === 'translation') {
+    cell.classList.add('has-gloss-view');
+    cell.append(el('span', 'gloss-view'));
+  }
   cell.append(input);
   bindGlossInput(input, slot, options);
   return cell;
@@ -570,11 +575,13 @@ function bindGlossInput(input, slot, options) {
   input.addEventListener('compositionend', () => {
     input.dataset.dirty = 'true';
     input.title = input.value;
+    fitGlossInput(input);
     setTimeout(emit, 0);
   });
   input.addEventListener('input', (event) => {
     input.dataset.dirty = 'true';
     input.title = input.value;
+    fitGlossInput(input);
     if (ime.composing || event.isComposing) return;
     emit();
   });
@@ -619,8 +626,10 @@ export function syncPaperLine(word) {
     if (!(input instanceof HTMLInputElement) || document.activeElement === input) return;
     if (input.dataset.dirty === 'true' || input.value === value) return;
     input.value = value;
-    if (input.classList.contains('gloss-input')) input.title = value || input.title;
-    else fitPaperInput(input);
+    if (input.classList.contains('gloss-input')) {
+      input.title = value || input.title;
+      fitGlossInput(input);
+    } else fitPaperInput(input);
     if (field === 'origin' && word.originLanguage && !value) input.title = word.originLanguage;
   });
 }
@@ -630,27 +639,200 @@ let fontsReady = false;
 let fontFitPending = false;
 
 function fitPaperInput(input) {
+  if (input.dataset.field === 'hiragana') {
+    fitHiraganaInput(input);
+    return;
+  }
   const chars = Array.from(input.value).length;
   if (!chars) {
     const placeholder = Array.from(input.placeholder || '').length;
     input.style.width = `${Math.max(placeholder, 3)}em`;
     return;
   }
-  const style = getComputedStyle(input);
-  const context = measureCanvas.getContext('2d');
-  context.font = style.font;
-  const width = Math.ceil(context.measureText(input.value).width);
+  const width = Math.ceil(measureWidth(input, input.value)) + fieldPadding(input);
   input.style.width = `${Math.max(width, 1)}px`;
-  if (!fontsReady && !fontFitPending && document.fonts?.ready) {
-    fontFitPending = true;
-    document.fonts.ready.then(() => {
-      fontsReady = true;
-      fontFitPending = false;
-      document.querySelectorAll('.paper-input').forEach((node) => {
-        if (node instanceof HTMLInputElement && node.value) fitPaperInput(node);
-      });
-    });
+  watchNotebookFonts();
+}
+
+function fieldPadding(input) {
+  const style = getComputedStyle(input);
+  return (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+}
+
+function fitHiraganaInput(input) {
+  const cell = input.closest('.word-reading');
+  if (!cell?.isConnected) return;
+  input.style.fontSize = '';
+  const base = parseFloat(getComputedStyle(input).fontSize) || 22;
+  const hint = cell.querySelector('.reading-suggest');
+  const hintWidth = hint && !hint.hidden ? hint.getBoundingClientRect().width + 6 : 0;
+  const limit = Math.max(0, cell.clientWidth - hintWidth);
+  const available = Math.max(0, limit - fieldPadding(input));
+  const text = input.value;
+  if (!text || available <= 0) {
+    if (!text) input.style.width = '3em';
+    return;
   }
+  const full = measureWidth(input, text, base);
+  let size = base;
+  if (full > available) size = Math.max(base * 0.75, Math.min(base, base * (available / full)));
+  const fitted = measureWidth(input, text, size);
+  if (fitted > available) size = base * 0.75;
+  const drawn = measureWidth(input, text, size);
+  input.style.fontSize = size < base - 0.2 ? `${size}px` : '';
+  input.style.width = `${Math.max(1, Math.min(Math.ceil(drawn) + fieldPadding(input), limit))}px`;
+  if (drawn > available + 1) input.title = text;
+  else if (input.title === text) input.removeAttribute('title');
+  watchNotebookFonts();
+}
+
+function fitGlossInput(input) {
+  const view = input.closest('.line-gloss')?.querySelector('.gloss-view');
+  if (!(view instanceof HTMLElement) || !view.isConnected) return;
+  const text = input.value;
+  const width = view.clientWidth || input.closest('.line-gloss')?.clientWidth || 0;
+  if (width <= 0) return;
+  const base = parseFloat(getComputedStyle(view).fontSize) || 15;
+  let size = base;
+  let layout = layoutGloss(text, width, size, view);
+  if (!layout.fits && text) {
+    let low = base * 0.75;
+    let high = base;
+    let best = layoutGloss(text, width, low, view);
+    if (best.fits) {
+      for (let step = 0; step < 6; step += 1) {
+        const mid = (low + high) / 2;
+        const trial = layoutGloss(text, width, mid, view);
+        if (trial.fits) {
+          best = trial;
+          low = mid;
+        } else {
+          high = mid;
+        }
+      }
+      size = low;
+      layout = best;
+    } else {
+      size = low;
+      layout = best;
+    }
+  }
+  view.style.fontSize = size < base - 0.2 ? `${size}px` : '';
+  view.replaceChildren(...layout.lines.map((line) => {
+    const span = el('span', 'gloss-line', line);
+    return span;
+  }));
+  if (!layout.fits && text) view.title = text;
+  else view.removeAttribute('title');
+  watchNotebookFonts();
+}
+
+function layoutGloss(text, width, size, sample) {
+  if (!text) return { lines: [], fits: true };
+  if (measureWidth(sample, text, size) <= width) return { lines: [text], fits: true };
+  const parts = glossParts(text);
+  if (parts.length > 1) {
+    let chosen = null;
+    let chosenOverflow = Infinity;
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      const left = parts.slice(0, index + 1).join('');
+      const right = parts.slice(index + 1).join('');
+      const overflow = Math.max(0, measureWidth(sample, left, size) - width)
+        + Math.max(0, measureWidth(sample, right, size) - width);
+      if (overflow === 0) return { lines: [left, right], fits: true };
+      if (overflow < chosenOverflow) {
+        chosen = [left, right];
+        chosenOverflow = overflow;
+      }
+    }
+    if (chosen) return { lines: chosen, fits: false };
+  }
+  const chars = [...text];
+  const cut = largestPrefix(chars, width, size, sample);
+  if (cut > 0 && cut < chars.length) {
+    const left = chars.slice(0, cut).join('');
+    const right = chars.slice(cut).join('');
+    return {
+      lines: [left, right],
+      fits: measureWidth(sample, left, size) <= width + 0.5 && measureWidth(sample, right, size) <= width + 0.5,
+    };
+  }
+  return { lines: [text], fits: false };
+}
+
+function glossParts(text) {
+  const primary = splitKeeping(text, '、');
+  if (primary.length > 1) return primary;
+  return splitKeeping(text, /[，,；;]/u);
+}
+
+function splitKeeping(text, delimiter) {
+  const parts = [];
+  let buffer = '';
+  for (const char of text) {
+    buffer += char;
+    if (typeof delimiter === 'string' ? char === delimiter : delimiter.test(char)) {
+      parts.push(buffer);
+      buffer = '';
+    }
+  }
+  if (buffer) parts.push(buffer);
+  return parts;
+}
+
+function largestPrefix(chars, width, size, sample) {
+  let low = 1;
+  let high = chars.length;
+  let best = 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (measureWidth(sample, chars.slice(0, mid).join(''), size) <= width) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return best;
+}
+
+function measureWidth(sample, text, size) {
+  const style = getComputedStyle(sample);
+  const context = measureCanvas.getContext('2d');
+  context.font = size
+    ? `${style.fontStyle} ${style.fontWeight} ${size}px ${style.fontFamily}`
+    : style.font;
+  return context.measureText(text).width;
+}
+
+function watchNotebookFonts() {
+  if (fontsReady || fontFitPending || !document.fonts?.ready) return;
+  fontFitPending = true;
+  document.fonts.ready.then(() => {
+    fontsReady = true;
+    fontFitPending = false;
+    scheduleNotebookFit();
+  });
+}
+
+let notebookFitFrame = 0;
+
+function scheduleNotebookFit(root = document) {
+  cancelAnimationFrame(notebookFitFrame);
+  notebookFitFrame = requestAnimationFrame(() => fitNotebookFields(root));
+}
+
+function fitNotebookFields(root) {
+  root.querySelectorAll('.paper-input').forEach((input) => {
+    if (input instanceof HTMLInputElement) fitPaperInput(input);
+  });
+  root.querySelectorAll('.line-gloss .gloss-input').forEach((input) => {
+    if (input instanceof HTMLInputElement) fitGlossInput(input);
+  });
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('resize', () => scheduleNotebookFit());
 }
 
 function updateReadingHint(input) {
