@@ -5,6 +5,7 @@
  * 遠端同步可呼叫 notify()。
  */
 
+import { STARTER_WORD_ROWS } from './starter-words.js';
 import { isHiragana, normalizeText } from './vocabulary.js';
 
 const HIGHLIGHTS = new Set(['yellow', 'pink', 'green']);
@@ -154,18 +155,43 @@ function cleanWord(input, { strict = false } = {}) {
   };
 }
 
-function seedWords(notebookId, createdAt, rows) {
-  return rows.map((row, order) => ({
-    id: `${notebookId}-${String(order + 1).padStart(2, '0')}`,
-    notebookId,
+const STARTER_ID = 'nb-starter';
+const STARTER_WORDS_VERSION = 2;
+
+function starterWords(createdAt) {
+  return STARTER_WORD_ROWS.map((row, order) => ({
+    id: `${STARTER_ID}-${String(order + 1).padStart(3, '0')}`,
+    notebookId: STARTER_ID,
     kanji: row[0],
     hiragana: row[1],
-    note: row[2] || '',
-    highlight: row[3] || null,
+    note: '',
+    translation: row[2],
+    translationEdited: true,
+    originWord: '',
+    originLanguage: '',
+    originEdited: false,
+    readingEdited: true,
+    glossStale: false,
+    lookupKey: '',
+    highlight: null,
     order,
     createdAt,
     updatedAt: createdAt,
   }));
+}
+
+function migrateStarterNotebook(state) {
+  if ((state.starterWordsVersion || 0) >= STARTER_WORDS_VERSION) return false;
+  state.starterWordsVersion = STARTER_WORDS_VERSION;
+  const notebook = state.notebooks.find((item) => item.id === STARTER_ID);
+  if (!notebook) return true;
+  const createdAt = notebook.createdAt || nowIso();
+  state.words = state.words.filter((word) => word.notebookId !== STARTER_ID);
+  starterWords(createdAt).forEach((word) => {
+    const clean = cleanWord(word);
+    if (clean) state.words.push(clean);
+  });
+  return true;
 }
 
 const OLD_SAMPLE_IDS = ['nb-daily', 'nb-n2', 'nb-n3', 'nb-weak', 'nb-work'];
@@ -184,20 +210,20 @@ function isUntouchedSample(data) {
 function createSeedState() {
   const createdAt = new Date().toISOString();
   const notebooks = [{
-    id: 'nb-starter',
+    id: STARTER_ID,
     title: '日本語の単語帳',
     color: 'sage',
+    type: 'kanji',
     createdAt,
     updatedAt: createdAt,
   }];
-  const words = seedWords('nb-starter', createdAt, [
-    ['禁止', 'きんし', '', null],
-    ['危ない', 'あぶない', '', null],
-    ['静か', 'しずか', '', null],
-    ['危険', 'きけん', '', null],
-    ['練習', 'れんしゅう', '', null],
-  ]);
-  return { version: 1, notebooks, words, practiceLogs: [] };
+  return {
+    version: 1,
+    starterWordsVersion: STARTER_WORDS_VERSION,
+    notebooks,
+    words: starterWords(createdAt),
+    practiceLogs: [],
+  };
 }
 
 function normalizeState(data) {
@@ -213,7 +239,10 @@ function normalizeState(data) {
   const practiceLogs = Array.isArray(data?.practiceLogs)
     ? data.practiceLogs.filter((log) => log && typeof log === 'object' && ids.has(log.notebookId))
     : [];
-  return { version: 1, notebooks, words, practiceLogs };
+  const starterWordsVersion = Number.isFinite(Number(data?.starterWordsVersion))
+    ? Math.max(0, Math.floor(Number(data.starterWordsVersion)))
+    : 0;
+  return { version: 1, starterWordsVersion, notebooks, words, practiceLogs };
 }
 
 function persist() {
@@ -250,7 +279,7 @@ function load() {
     if (isUntouchedSample(memory)) {
       memory = createSeedState();
       persist();
-    } else if (glossMigrated) {
+    } else if (migrateStarterNotebook(memory) || glossMigrated) {
       persist();
     }
   } catch {
