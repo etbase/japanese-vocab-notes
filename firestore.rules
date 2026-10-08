@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function textOk(value, min, max) {
+      return value is string && value.size() >= min && value.size() <= max;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId)
+        && textOk(request.resource.data.displayName, 0, 80);
+      allow delete: if false;
+
+      match /notebooks/{notebookId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && textOk(request.resource.data.title, 1, 30)
+          && textOk(request.resource.data.color, 1, 20)
+          && request.resource.data.createdAt is string
+          && request.resource.data.updatedAt is string;
+        allow delete: if isOwner(userId);
+      }
+
+      match /words/{wordId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && textOk(request.resource.data.notebookId, 1, 80)
+          && textOk(request.resource.data.kanji, 1, 40)
+          && textOk(request.resource.data.hiragana, 1, 80)
+          && request.resource.data.note is string
+          && request.resource.data.note.size() <= 500
+          && (request.resource.data.highlight == null
+            || request.resource.data.highlight in ['yellow', 'pink', 'green'])
+          && request.resource.data.order is int
+          && request.resource.data.order >= 0
+          && request.resource.data.createdAt is string
+          && request.resource.data.updatedAt is string;
+        allow delete: if isOwner(userId);
+      }
+
+      match /practiceLogs/{logId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && textOk(request.resource.data.notebookId, 1, 80)
+          && request.resource.data.mode in ['practice', 'focus']
+          && request.resource.data.total is int
+          && request.resource.data.correct is int
+          && request.resource.data.wrong is int
+          && request.resource.data.durationMs is int
+          && request.resource.data.total >= 0
+          && request.resource.data.correct >= 0
+          && request.resource.data.wrong >= 0
+          && request.resource.data.durationMs >= 0
+          && request.resource.data.createdAt is string;
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

@@ -1,0 +1,135 @@
+html.is-compact {
+  --row-h: 40px;
+}
+
+html.is-compact .spread {
+  grid-template-columns: 1fr;
+}
+
+html.is-compact .page-right,
+html.is-compact .spread::after {
+  display: none;
+}
+
+html.is-compact .page-left,
+html.is-compact .page-right {
+  padding: 8px 12px 2px;
+  border-left: 0;
+}
+
+html.is-compact .page-head {
+  height: 22px;
+  line-height: 22px;
+}
+
+html.is-compact .page-number {
+  height: 24px;
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+html.is-compact .word-line {
+  grid-template-columns: 30px minmax(0, 1.05fr) minmax(0, 1.15fr) 62px;
+  column-gap: 4px;
+  padding-right: 2px;
+  padding-left: 0;
+}
+
+html.is-compact .word-kanji,
+html.is-compact .word-reading {
+  font-size: 17px;
+}
+
+html.is-compact .site-header {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+
+html.is-compact .brand-kicker {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+html.is-compact .brand-title {
+  font-size: 16px;
+}
+
+html.is-compact .header-actions .btn {
+  padding: 0 10px;
+}
+
+html.is-compact .notebook-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+html.is-compact .notebook-toolbar {
+  align-items: center;
+}
+
+html.is-compact .notebook-toolbar .btn {
+  align-self: center;
+  flex: none;
+}
+
+html.is-compact .notebook-heading {
+  flex: 1;
+  text-align: right;
+}
+
+html.is-compact .notebook-heading h2 {
+  font-size: 26px;
+  text-align: right;
+}
+
+html.is-compact .shelf-heading h2 {
+  font-size: 28px;
+}
+
+html.is-compact .pager {
+  order: 2;
+  margin-top: 2px;
+  margin-bottom: 8px;
+}
+
+html.is-compact .book {
+  order: 3;
+}
+
+html.is-compact .pager .btn {
+  padding: 0 12px;
+}
+
+@media (max-width: 380px) {
+  .app {
+    width: min(1120px, calc(100% - 20px));
+  }
+
+  .word-line {
+    grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1.08fr) 52px;
+  }
+
+  .word-kanji,
+  .word-reading {
+    font-size: 15px;
+  }
+
+  .cover-title {
+    font-size: 22px;
+  }
+
+  .site-header {
+    padding-top: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="description" content="日本語の単語を書いて、見直して、ひらがなで覚えるノートです。">
+  <meta name="theme-color" content="#F7F4ED">
+  <meta name="color-scheme" content="light">
+  <title>Japanese Vocab Notes</title>
+  <link rel="icon" href="assets/icons/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Noto+Sans+JP:wght@400;700&family=Yomogi&family=Zen+Kurenaido&display=swap" rel="stylesheet">
+  <script>
+    (function () {
+      var query = '(max-width: 720px), (max-height: 520px)';
+      if (window.matchMedia(query).matches) document.documentElement.classList.add('is-compact');
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/notebook.css">
+  <link rel="stylesheet" href="css/responsive.css">
+</head>
+<body>
+  <a class="skip-link" href="#app-root">本文へ</a>
+  <div class="app">
+    <header class="site-header">
+      <a class="brand" href="#/">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-text">
+          <span class="brand-kicker">ことばのノート</span>
+          <h1 class="brand-title hand">Japanese Vocab Notes</h1>
+        </span>
+      </a>
+      <div class="header-actions">
+        <span id="account-badge" class="demo-badge" hidden>デモ</span>
+        <button id="login-button" class="btn btn-ghost" type="button">ログイン</button>
+      </div>
+    </header>
+    <p id="save-warning" class="save-warning" hidden></p>
+    <main id="app-root" tabindex="-1">
+      <p class="loading">ノートを開いています…</p>
+    </main>
+  </div>
+  <div id="modal-root"></div>
+  <p id="live-status" class="visually-hidden" aria-live="polite"></p>
+  <noscript>
+    <style>.loading { display: none; }</style>
+    <p class="noscript">JavaScript を有効にすると、ノートを開けます。</p>
+  </noscript>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
