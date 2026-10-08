@@ -193,7 +193,7 @@ function stampLineIds() {
   });
 }
 
-function saveSlotNow(slot, kanji, hiragana) {
+function saveSlotNow(slot, kanji, hiragana, { lookup = false } = {}) {
   const line = document.querySelector(`[data-slot="${slot}"]`);
   const id = line?.dataset.wordId || '';
   const nextKanji = String(kanji ?? '').trim();
@@ -211,8 +211,17 @@ function saveSlotNow(slot, kanji, hiragana) {
     : storedList[slot];
   if (id && !stored) return;
   if (!stored && !nextKanji && !nextReading) return;
-  if (stored && stored.kanji === nextKanji && stored.hiragana === nextReading) return;
   const notebook = currentNotebook();
+  if (stored && stored.kanji === nextKanji && stored.hiragana === nextReading) {
+    if (
+      lookup
+      && nextKanji
+      && notebook?.autoLookup !== false
+      && !stored.glossStale
+      && stored.lookupKey !== nextKanji
+    ) scheduleLookup(stored.id, nextKanji);
+    return;
+  }
   const headChanged = Boolean(stored) && stored.kanji !== nextKanji;
   const readingChanged = Boolean(stored) && stored.hiragana !== nextReading;
   const hasGloss = Boolean(String(stored?.translation || '').trim() || String(stored?.originWord || '').trim());
@@ -237,7 +246,7 @@ function saveSlotNow(slot, kanji, hiragana) {
     if (!rendering) render();
     return;
   }
-  if (!word || !nextKanji || notebook?.autoLookup === false || word.glossStale) return;
+  if (!lookup || !word || !nextKanji || notebook?.autoLookup === false || word.glossStale) return;
   if (word.lookupKey === nextKanji) return;
   scheduleLookup(word.id, nextKanji);
 }
@@ -328,15 +337,24 @@ async function applyLookup(wordId, head, force) {
     patch.originLanguage = result.originLanguage || '';
     if (force) patch.originEdited = false;
   }
+  if (result?.translation && (force || !latest.translationEdited)) {
+    patch.translation = result.translation;
+    if (force) patch.translationEdited = false;
+  }
   await updateWord(wordId, patch);
   const saved = getWordsByNotebook(state.notebookId).find((item) => item.id === wordId);
   if (saved) syncPaperLine(saved);
   if (!force) return;
   const live = document.querySelector('#live-status');
   if (live) {
-    live.textContent = result?.reading || result?.originWord
-      ? '辞書の読みと語源を入れました'
-      : '辞書には、読みも語源も見当たりませんでした';
+    const filled = [
+      patch.hiragana ? '読み' : '',
+      patch.originWord ? '語源' : '',
+      patch.translation ? '訳' : '',
+    ].filter(Boolean);
+    live.textContent = filled.length
+      ? `辞書から${filled.join('と')}を入れました`
+      : '辞書には見当たりませんでした';
   }
   if (!rendering) render();
 }
@@ -484,7 +502,15 @@ function render() {
         onTogglePen: togglePen,
         onSelectPen: selectPen,
         onDeleteWord: confirmDeleteLine,
-        onEditLine: ({ slot, kanji, hiragana }) => scheduleLineSave(slot, kanji, hiragana),
+        onEditLine: ({ slot, kanji, hiragana, lookup }) => {
+          if (lookup) {
+            clearTimeout(lineTimers.get(slot));
+            lineTimers.delete(slot);
+            saveSlotNow(slot, kanji, hiragana, { lookup: true });
+            return;
+          }
+          scheduleLineSave(slot, kanji, hiragana);
+        },
         onEditGloss: ({ slot, field, value }) => scheduleGlossSave(slot, field, value),
         onRelookup: relookupLine,
         onKeepGloss: keepGloss,

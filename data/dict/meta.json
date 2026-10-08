@@ -2,10 +2,15 @@
   "source": "JMdict / EDICT",
   "publisher": "Electronic Dictionary Research and Development Group",
   "license": "CC BY-SA 4.0",
-  "licenseScope": "Japanese and English components. This build keeps hiragana readings and explicit loanword sources only.",
+  "licenseScope": "Japanese readings and explicit loanword sources from JMdict. Traditional Chinese glosses and some etymology from Wiktionary.",
   "url": "https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project",
   "entries": 209084,
   "readings": 206945,
   "origins": 2234,
-  "note": "English glosses are not stored. Traditional Chinese translations are not included. Empty loanword tags are not guessed."
+  "note": "Chinese glosses are Traditional Chinese from Wiktionary. Simplified glosses are converted with OpenCC s2twp. Words without a gloss stay blank. Loanword origins come from explicit etymology, not from romanizing katakana.",
+  "translationSource": "Japanese and Chinese Wiktionary via kaikki.org wiktextract",
+  "translationLicense": "CC BY-SA 3.0 and GFDL, same as Wiktionary",
+  "translationUrl": "https://ja.wiktionary.org/",
+  "translations": 81530,
+  "wiktionaryOrigins": 0
 }

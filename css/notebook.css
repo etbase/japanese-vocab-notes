@@ -362,7 +362,7 @@
 }
 
 .gloss-input::placeholder {
-  color: #c4baae;
+  color: #ddd6cc;
 }
 
 .word-line.is-editable:not(.has-word):not(:focus-within) .gloss-input::placeholder {
@@ -659,13 +659,22 @@
   content: "";
   position: absolute;
   right: -4px;
-  bottom: 0.32em;
+  bottom: 0.04em;
   left: -4px;
   z-index: -1;
-  height: 0.46em;
+  height: 0.68em;
+  border-radius: 0;
   pointer-events: none;
-  border-radius: 999px;
-  transform: rotate(-1.1deg);
+  transform: rotate(-0.4deg);
+  transform-origin: center;
+  clip-path: polygon(
+    4px 16%,
+    36% 10%,
+    calc(100% - 3px) 14%,
+    calc(100% - 1px) 86%,
+    64% 92%,
+    1px 84%
+  );
 }
 
 .paper-field.mark .paper-input,
@@ -678,31 +687,57 @@
 }
 
 .mark[data-ink="1"]::before {
-  transform: rotate(1deg);
-  height: 0.4em;
+  height: 0.64em;
+  bottom: 0.06em;
+  transform: rotate(0.35deg);
+  clip-path: polygon(
+    3px 14%,
+    48% 8%,
+    calc(100% - 4px) 16%,
+    calc(100% - 1px) 84%,
+    52% 94%,
+    0 88%
+  );
 }
 
 .mark[data-ink="2"]::before {
-  transform: rotate(-0.5deg);
-  height: 0.42em;
-  bottom: 0.28em;
+  height: 0.7em;
+  bottom: 0.02em;
+  transform: rotate(-0.2deg);
+  clip-path: polygon(
+    5px 18%,
+    32% 10%,
+    calc(100% - 2px) 14%,
+    calc(100% - 1px) 88%,
+    68% 94%,
+    1px 86%
+  );
 }
 
 .mark[data-ink="3"]::before {
-  transform: rotate(1.4deg);
-  height: 0.42em;
+  height: 0.62em;
+  bottom: 0.08em;
+  transform: rotate(0.5deg);
+  clip-path: polygon(
+    3px 12%,
+    44% 8%,
+    calc(100% - 4px) 16%,
+    100% 82%,
+    46% 92%,
+    1px 86%
+  );
 }
 
 .mark-yellow::before {
-  background: rgba(214, 170, 52, 0.48);
+  background: rgba(224, 184, 68, 0.5);
 }
 
 .mark-pink::before {
-  background: rgba(206, 126, 150, 0.46);
+  background: rgba(212, 138, 160, 0.48);
 }
 
 .mark-green::before {
-  background: rgba(112, 164, 124, 0.48);
+  background: rgba(124, 172, 134, 0.5);
 }
 
 .mark.is-fresh::before {
@@ -903,6 +938,6 @@
 }
 
 @keyframes mark-in {
-  from { transform: scaleX(0.15); }
-  to { transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }

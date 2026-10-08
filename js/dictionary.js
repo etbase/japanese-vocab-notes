@@ -1,4 +1,4 @@
-/** 本地 JMdict / EDICT 查詢。只讀讀音與標明的語源，不查第三方 API。 */
+/** 本地詞典查詢。讀音來自 JMdict，中文與語源來自維基詞典。不呼叫翻譯 API。 */
 
 const BUCKETS = 16;
 const cache = new Map();
@@ -74,7 +74,7 @@ async function loadBucket(index) {
 
 /**
  * 找不到時回傳 null。
- * translation 一律是空字串：這份資料沒有可授權的繁體中文。
+ * translation 只在維基詞典有中文對譯時才有值。
  */
 export async function lookupDictionary(text) {
   const key = compactKey(text);
@@ -85,11 +85,12 @@ export async function lookupDictionary(text) {
   const reading = String(row[0] || '');
   const originWord = String(row[1] || '');
   const code = String(row[2] || '');
-  if (!reading && !originWord) return null;
+  const translation = String(row[3] || '');
+  if (!reading && !originWord && !translation) return null;
   return {
     reading,
     originWord,
     originLanguage: originWord ? (LANGUAGE_NAMES[code] || code) : '',
-    translation: '',
+    translation,
   };
 }

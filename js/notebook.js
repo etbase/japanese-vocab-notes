@@ -504,11 +504,11 @@ function buildGloss(word, slot, options) {
     gloss.append(
       glossInput(word?.originWord || '', '原文', 'origin', word?.originLanguage || ''),
       el('span', 'gloss-paren', '（'),
-      glossInput(word?.translation || '', '訳', 'translation', ''),
+      glossInput(word?.translation || '', '意味を入力', 'translation', ''),
       el('span', 'gloss-paren', '）'),
     );
   } else {
-    gloss.append(glossInput(word?.translation || '', '訳', 'translation', ''));
+    gloss.append(glossInput(word?.translation || '', '意味を入力', 'translation', ''));
   }
   gloss.querySelectorAll('.gloss-input').forEach((input) => bindGlossInput(input, slot, options));
   if (word?.glossStale && options.notebook?.showTranslation !== false) {
@@ -592,21 +592,45 @@ export function syncPaperLine(word) {
   });
 }
 
+const measureCanvas = document.createElement('canvas');
+let fontsReady = false;
+let fontFitPending = false;
+
 function fitPaperInput(input) {
-  const length = Math.max(Array.from(input.value).length, 3);
-  input.style.width = `${length + 0.35}em`;
+  const chars = Array.from(input.value).length;
+  if (!chars) {
+    const placeholder = Array.from(input.placeholder || '').length;
+    input.style.width = `${Math.max(placeholder, 3)}em`;
+    return;
+  }
+  const style = getComputedStyle(input);
+  const context = measureCanvas.getContext('2d');
+  context.font = style.font;
+  const width = Math.ceil(context.measureText(input.value).width);
+  input.style.width = `${Math.max(width, 1)}px`;
+  if (!fontsReady && !fontFitPending && document.fonts?.ready) {
+    fontFitPending = true;
+    document.fonts.ready.then(() => {
+      fontsReady = true;
+      fontFitPending = false;
+      document.querySelectorAll('.paper-input, .gloss-input').forEach((node) => {
+        if (node instanceof HTMLInputElement && node.value) fitPaperInput(node);
+      });
+    });
+  }
 }
 
 function bindPaperLine(kanjiCell, readingCell, slot, options) {
   const kanji = kanjiCell.querySelector('input');
   const reading = readingCell?.querySelector('input') || null;
   let composing = false;
-  const emit = () => {
+  const emit = (lookup) => {
     if (composing) return;
     options.onEditLine?.({
       slot,
       kanji: kanji.value,
       hiragana: reading ? reading.value : '',
+      lookup: Boolean(lookup),
     });
   };
   [kanji, reading].filter(Boolean).forEach((input) => {
@@ -616,7 +640,7 @@ function bindPaperLine(kanjiCell, readingCell, slot, options) {
     input.addEventListener('compositionend', () => {
       composing = false;
       fitPaperInput(input);
-      emit();
+      emit(false);
     });
     input.addEventListener('input', (event) => {
       fitPaperInput(input);
@@ -624,14 +648,18 @@ function bindPaperLine(kanjiCell, readingCell, slot, options) {
       const hasText = kanji.value.trim() || (reading?.value.trim() || '');
       line?.classList.toggle('has-word', Boolean(hasText) || Boolean(line?.dataset.wordId));
       if (composing || event.isComposing) return;
-      emit();
+      emit(false);
+    });
+    input.addEventListener('blur', () => {
+      if (composing || input.dataset.field !== 'kanji') return;
+      emit(true);
     });
     input.addEventListener('keydown', (event) => {
       if (options.pen?.active) return;
       if (event.isComposing || composing || event.keyCode === 229) return;
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      emit();
+      emit(input.dataset.field === 'kanji');
       if (input.dataset.field === 'kanji' && reading) {
         reading.focus();
         return;
