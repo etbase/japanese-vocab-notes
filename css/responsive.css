@@ -23,17 +23,42 @@ html.is-compact .page-head {
 }
 
 html.is-compact .page-number {
-  height: 24px;
+  height: 20px;
   justify-content: center;
   padding-right: 0;
   padding-left: 0;
 }
 
 html.is-compact .word-line {
-  grid-template-columns: 30px minmax(0, 1.05fr) minmax(0, 1.15fr) 62px;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.25fr) auto;
   column-gap: 4px;
-  padding-right: 2px;
+  padding-right: 0;
   padding-left: 0;
+}
+
+html.is-compact .word-actions .text-button,
+html.is-compact .answer-tools .text-button {
+  min-height: 24px;
+  padding: 0 2px;
+  font-size: 11px;
+}
+
+html.is-compact .notebook-tools {
+  order: 1;
+  margin: 0 0 6px;
+}
+
+html.is-compact .notebook-tools .btn {
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+html.is-compact .focus-sheet {
+  min-height: 360px;
+}
+
+html.is-compact .focus-kanji {
+  font-size: 36px;
 }
 
 html.is-compact .word-kanji,
@@ -45,6 +70,7 @@ html.is-compact .site-header {
   flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
+  padding: 14px 0 8px;
 }
 
 html.is-compact .brand-kicker {
@@ -63,10 +89,13 @@ html.is-compact .header-actions .btn {
 html.is-compact .notebook-screen {
   display: flex;
   flex-direction: column;
+  margin-top: 0;
 }
 
 html.is-compact .notebook-toolbar {
   align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 html.is-compact .notebook-toolbar .btn {
@@ -80,8 +109,12 @@ html.is-compact .notebook-heading {
 }
 
 html.is-compact .notebook-heading h2 {
-  font-size: 26px;
+  font-size: 22px;
+  line-height: 1.25;
   text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 html.is-compact .shelf-heading h2 {
@@ -108,7 +141,7 @@ html.is-compact .pager .btn {
   }
 
   .word-line {
-    grid-template-columns: 26px minmax(0, 1fr) minmax(0, 1.08fr) 52px;
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.2fr) auto;
   }
 
   .word-kanji,

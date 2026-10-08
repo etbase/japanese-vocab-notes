@@ -2,14 +2,16 @@
 
 import { getCurrentUser, usingDemoMode } from './auth.js';
 import {
-  closeMarkerMenu,
   COVER_COLORS,
   renderNotebook,
   renderShelf,
 } from './notebook.js';
 import {
+  addPracticeLog,
+  addWords,
   createNotebook,
   deleteNotebook,
+  deleteWord,
   getNotebook,
   getNotebooks,
   getWordsByNotebook,
@@ -18,8 +20,10 @@ import {
   setActiveUser,
   setHighlight,
   updateNotebook,
+  updateWord,
 } from './storage.js';
-import { pageCount, spreadFor } from './vocabulary.js';
+import { judgeAnswer } from './practice.js';
+import { isHiragana, pageCount, pageForWord, spreadFor, wordsForPage } from './vocabulary.js';
 
 const COMPACT_QUERY = '(max-width: 720px), (max-height: 520px)';
 
@@ -31,6 +35,13 @@ const state = {
   flashWordId: null,
   freshId: null,
   focusSelector: null,
+  pen: { active: false, tool: 'yellow' },
+  study: null,
+  answers: {},
+  revealed: {},
+  hints: {},
+  showResult: false,
+  focusDraft: '',
 };
 
 let previousView = null;
@@ -88,10 +99,35 @@ function focusPending() {
   state.focusSelector = null;
   const target = document.querySelector(selector);
   if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+  if (target instanceof HTMLInputElement) {
+    const end = target.value.length;
+    target.setSelectionRange(end, end);
+  }
+}
+
+function snapshotPracticeFields() {
+  if (state.skipSnapshot) {
+    state.skipSnapshot = false;
+    return;
+  }
+  document.querySelectorAll('[data-word-input]').forEach((input) => {
+    const current = state.answers[input.dataset.wordInput] || {};
+    state.answers[input.dataset.wordInput] = { ...current, value: input.value };
+  });
+  const focusInput = document.querySelector('[data-focus-input]');
+  if (focusInput) state.focusDraft = focusInput.value;
+}
+
+function displayedWords(allWords) {
+  if (state.study?.kind === 'practice' && state.study.reviewIds) {
+    const ids = new Set(state.study.reviewIds);
+    return allWords.filter((word) => ids.has(word.id));
+  }
+  return allWords;
 }
 
 function render() {
-  closeMarkerMenu();
+  snapshotPracticeFields();
   const root = document.querySelector('#app-root');
   const turn = state.turn;
   const flashWordId = state.flashWordId;
@@ -114,7 +150,8 @@ function render() {
       }
       renderShelfView(root, freshId);
     } else {
-      const words = getWordsByNotebook(notebook.id);
+      const allWords = getWordsByNotebook(notebook.id);
+      const words = displayedWords(allWords);
       const view = spreadFor(state.page, pageCount(words), { compact: isCompact() });
       if (view.current !== state.page) {
         state.page = view.current;
@@ -124,12 +161,36 @@ function render() {
       renderNotebook(root, {
         notebook,
         words,
+        totalWords: allWords,
         page: state.page,
         compact: isCompact(),
         turn,
         flashWordId,
+        pen: state.pen,
+        study: state.study,
+        answers: state.answers,
+        revealed: state.revealed,
+        hints: state.hints,
+        showResult: state.showResult,
+        focusDraft: state.focusDraft,
         onStep: step,
         onHighlight: changeHighlight,
+        onTogglePen: togglePen,
+        onSelectPen: selectPen,
+        onAddWord: () => openWordDialog('create'),
+        onEditWord: (word) => openWordDialog('edit', word),
+        onDeleteWord: confirmDeleteWord,
+        onStartPractice: startPractice,
+        onStartFocus: startFocus,
+        onExitStudy: exitStudy,
+        onFinishPractice: finishPractice,
+        onRetry: retryPractice,
+        onReview: reviewWrong,
+        onFocusCorrect: focusCorrect,
+        onFocusWrong: focusWrong,
+        onFocusDraft: (value) => {
+          state.focusDraft = value;
+        },
       });
       if (!state.focusSelector && enteredNotebook) state.focusSelector = '#notebook-title';
     }
@@ -161,8 +222,8 @@ function renderShelfView(root, freshId) {
 }
 
 function step(direction) {
-  if (state.view !== 'notebook') return;
-  const words = getWordsByNotebook(state.notebookId);
+  if (state.view !== 'notebook' || state.study?.kind === 'focus') return;
+  const words = displayedWords(getWordsByNotebook(state.notebookId));
   const view = spreadFor(state.page, pageCount(words), { compact: isCompact() });
   if (direction === 'next' && !view.hasNext) return;
   if (direction === 'prev' && !view.hasPrev) return;
@@ -179,13 +240,161 @@ async function changeHighlight(wordId, color) {
   const result = await setHighlight(wordId, color);
   if (!result.ok) return;
   state.flashWordId = wordId;
-  state.focusSelector = `[data-marker="${CSS.escape(wordId)}"]`;
+  render();
+}
+
+function togglePen() {
+  state.pen.active = !state.pen.active;
+  if (state.pen.active && !state.pen.tool) state.pen.tool = 'yellow';
+  render();
+}
+
+function selectPen(tool) {
+  state.pen.tool = tool;
+  state.pen.active = true;
+  render();
+}
+
+function emptyWordNotice() {
+  openModal({
+    title: '練習',
+    body: 'まだ単語がありません。',
+    actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+  });
+}
+
+function startPractice() {
+  const words = getWordsByNotebook(state.notebookId);
+  if (!words.length) {
+    emptyWordNotice();
+    return;
+  }
+  state.study = { kind: 'practice', reviewIds: null };
+  state.answers = {};
+  state.revealed = {};
+  state.hints = {};
+  state.showResult = false;
+  render();
+}
+
+function startFocus() {
+  const words = getWordsByNotebook(state.notebookId);
+  if (!words.length) {
+    emptyWordNotice();
+    return;
+  }
+  state.study = {
+    kind: 'focus',
+    wordIds: words.map((word) => word.id),
+    wordsById: Object.fromEntries(words.map((word) => [word.id, word])),
+    index: 0,
+    wrong: 0,
+    startedAt: Date.now(),
+    finished: false,
+    durationMs: 0,
+  };
+  state.focusDraft = '';
+  state.showResult = false;
+  state.skipSnapshot = true;
+  render();
+}
+
+function focusCorrect() {
+  const study = state.study;
+  if (!study || study.kind !== 'focus' || study.finished) return;
+  study.index += 1;
+  state.focusDraft = '';
+  state.skipSnapshot = true;
+  if (study.index >= study.wordIds.length) {
+    study.finished = true;
+    study.durationMs = Date.now() - study.startedAt;
+    addPracticeLog({
+      notebookId: state.notebookId,
+      mode: 'focus',
+      total: study.wordIds.length,
+      correct: study.wordIds.length,
+      wrong: study.wrong,
+      durationMs: study.durationMs,
+    });
+  }
+  render();
+}
+
+function focusWrong() {
+  if (state.study?.kind === 'focus' && !state.study.finished) state.study.wrong += 1;
+}
+
+function exitStudy() {
+  state.study = null;
+  state.answers = {};
+  state.revealed = {};
+  state.hints = {};
+  state.showResult = false;
+  state.focusDraft = '';
+  render();
+}
+
+function finishPractice() {
+  snapshotPracticeFields();
+  const words = displayedWords(getWordsByNotebook(state.notebookId));
+  words.forEach((word) => {
+    const saved = state.answers[word.id];
+    if (!saved?.value) return;
+    const result = judgeAnswer(saved.value, word.hiragana);
+    saved.status = result.status === 'empty' ? '' : result.status;
+  });
+  state.showResult = true;
+  render();
+}
+
+function retryPractice() {
+  if (state.study?.kind === 'focus') {
+    startFocus();
+    return;
+  }
+  state.skipSnapshot = true;
+  state.answers = {};
+  state.revealed = {};
+  state.hints = {};
+  state.showResult = false;
+  render();
+}
+
+function reviewWrong() {
+  const words = displayedWords(getWordsByNotebook(state.notebookId));
+  const view = spreadFor(state.page, pageCount(words), { compact: isCompact() });
+  const visible = view.pages
+    .filter((pageNumber, index) => !(isCompact() && index > 0))
+    .flatMap((pageNumber) => wordsForPage(words, pageNumber));
+  const wrongIds = visible
+    .filter((word) => state.answers[word.id]?.status !== 'correct')
+    .map((word) => word.id);
+  if (!wrongIds.length) return;
+  state.skipSnapshot = true;
+  state.study = { kind: 'practice', reviewIds: wrongIds };
+  state.answers = {};
+  state.revealed = {};
+  state.hints = {};
+  state.showResult = false;
+  state.page = 1;
+  const hash = notebookHash(state.notebookId, 1);
+  if (location.hash !== hash) history.replaceState(null, '', hash);
   render();
 }
 
 function syncFromHash() {
   closeModal({ restore: false });
   const route = parseHash(location.hash);
+  const nextId = route.view === 'notebook' ? route.notebookId : null;
+  if (nextId !== state.notebookId) {
+    state.study = null;
+    state.answers = {};
+    state.revealed = {};
+    state.hints = {};
+    state.showResult = false;
+    state.focusDraft = '';
+    state.pen.active = false;
+  }
   if (route.view === 'notebook') {
     const notebook = getNotebook(route.notebookId);
     if (!notebook) {
@@ -278,6 +487,153 @@ function openModal({ title, body, actions = [] }) {
   const focusTarget = dialog.querySelector('input, button');
   focusTarget?.focus();
   return close;
+}
+
+function openWordDialog(mode, word) {
+  const form = el('form', 'notebook-form');
+  form.id = 'word-form';
+
+  const kanjiField = el('label', 'field');
+  kanjiField.append(el('span', 'field-label', '漢字・単語'));
+  const kanji = document.createElement('input');
+  kanji.type = 'text';
+  kanji.name = 'kanji';
+  kanji.maxLength = 40;
+  kanji.autocomplete = 'off';
+  kanji.spellcheck = false;
+  kanji.autocapitalize = 'off';
+  kanji.lang = 'ja';
+  kanji.placeholder = '禁止';
+  kanji.setAttribute('aria-describedby', 'word-form-error');
+  if (word) kanji.value = word.kanji;
+  kanjiField.append(kanji);
+
+  const readingField = el('label', 'field');
+  readingField.append(el('span', 'field-label', 'ひらがな'));
+  const reading = document.createElement('input');
+  reading.type = 'text';
+  reading.name = 'hiragana';
+  reading.maxLength = 60;
+  reading.autocomplete = 'off';
+  reading.spellcheck = false;
+  reading.autocapitalize = 'off';
+  reading.lang = 'ja';
+  reading.placeholder = 'きんし';
+  if (word) reading.value = word.hiragana;
+  readingField.append(reading);
+
+  const noteField = el('label', 'field');
+  noteField.append(el('span', 'field-label', 'メモ（任意）'));
+  const note = document.createElement('textarea');
+  note.name = 'note';
+  note.maxLength = 200;
+  note.lang = 'ja';
+  note.placeholder = '禁止進入';
+  note.rows = 3;
+  if (word?.note) note.value = word.note;
+  noteField.append(note);
+
+  const error = el('p', 'form-error');
+  error.id = 'word-form-error';
+  error.hidden = true;
+  error.setAttribute('role', 'alert');
+
+  const actions = el('div', 'modal-actions');
+  const cancel = el('button', 'btn btn-ghost', 'キャンセル');
+  cancel.type = 'button';
+  const submit = el('button', 'btn btn-primary', '保存する');
+  submit.type = 'submit';
+  actions.append(cancel, submit);
+  form.append(kanjiField, readingField, noteField, error, actions);
+
+  let composing = 0;
+  [kanji, reading, note].forEach((field) => {
+    field.addEventListener('compositionstart', () => {
+      composing += 1;
+    });
+    field.addEventListener('compositionend', () => {
+      composing = Math.max(0, composing - 1);
+    });
+  });
+  cancel.addEventListener('click', () => closeModal());
+
+  const showError = (message, field) => {
+    error.hidden = false;
+    error.textContent = message;
+    kanji.removeAttribute('aria-invalid');
+    reading.removeAttribute('aria-invalid');
+    if (field) field.setAttribute('aria-invalid', 'true');
+    field?.focus();
+  };
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (composing) return;
+    const kanjiText = kanji.value.trim();
+    const readingText = reading.value.trim();
+    const noteText = note.value.trim();
+    if (!kanjiText) {
+      showError('漢字・単語を入力してください', kanji);
+      return;
+    }
+    if (!isHiragana(readingText)) {
+      showError('ひらがなで入力してください', reading);
+      return;
+    }
+    submit.disabled = true;
+    const result = mode === 'edit'
+      ? await updateWord(word.id, { kanji: kanjiText, hiragana: readingText, note: noteText })
+      : await addWords(state.notebookId, [{ kanji: kanjiText, hiragana: readingText, note: noteText }]);
+    submit.disabled = false;
+    if (!result.ok) {
+      showError(result.message || '保存できませんでした', reading);
+      return;
+    }
+    closeModal({ restore: false });
+    if (mode === 'create') {
+      const created = result.words[0];
+      const list = getWordsByNotebook(state.notebookId);
+      state.page = pageForWord(list, created.id);
+      state.flashWordId = created.id;
+      const hash = notebookHash(state.notebookId, state.page);
+      if (location.hash !== hash) history.replaceState(null, '', hash);
+    } else {
+      state.flashWordId = word.id;
+    }
+    render();
+  });
+
+  openModal({
+    title: mode === 'edit' ? '単語を編集' : '単語を追加',
+    body: form,
+  });
+  kanji.focus();
+  kanji.setSelectionRange(kanji.value.length, kanji.value.length);
+}
+
+function confirmDeleteWord(word) {
+  const body = el('p', 'modal-text');
+  body.append('「');
+  body.append(el('strong', 'hand', word.kanji));
+  body.append('」を削除します。元に戻せません。');
+  openModal({
+    title: '単語を削除しますか',
+    body,
+    actions: [
+      { label: 'キャンセル', className: 'btn btn-ghost', onClick: () => closeModal() },
+      {
+        label: '削除する',
+        className: 'btn btn-danger',
+        onClick: async () => {
+          const result = await deleteWord(word.id);
+          if (!result.ok) return;
+          delete state.answers[word.id];
+          closeModal({ restore: false });
+          render();
+        },
+      },
+    ],
+  });
 }
 
 function openNotebookDialog(mode, notebook) {
@@ -436,7 +792,7 @@ function bindKeys() {
   document.addEventListener('keydown', (event) => {
     if (state.view !== 'notebook') return;
     if (document.body.classList.contains('modal-open')) return;
-    if (document.querySelector('.marker-menu')) return;
+    if (state.study?.kind === 'focus') return;
     const target = event.target;
     if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return;
     if (event.altKey || event.metaKey || event.ctrlKey) return;

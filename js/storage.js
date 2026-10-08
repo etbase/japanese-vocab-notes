@@ -101,10 +101,6 @@ function cleanWord(input, { strict = false } = {}) {
   };
 }
 
-function notebookStamp(offsetDays) {
-  return new Date(Date.UTC(2026, 0, 12 + offsetDays, 1, 0, 0)).toISOString();
-}
-
 function seedWords(notebookId, createdAt, rows) {
   return rows.map((row, order) => ({
     id: `${notebookId}-${String(order + 1).padStart(2, '0')}`,
@@ -119,117 +115,35 @@ function seedWords(notebookId, createdAt, rows) {
   }));
 }
 
+const OLD_SAMPLE_IDS = ['nb-daily', 'nb-n2', 'nb-n3', 'nb-weak', 'nb-work'];
+const OLD_SAMPLE_WORD_COUNT = 86;
+
+function isUntouchedSample(data) {
+  if (!data || data.notebooks.length !== OLD_SAMPLE_IDS.length) return false;
+  const ids = data.notebooks.map((notebook) => notebook.id).sort();
+  if (ids.some((id, index) => id !== OLD_SAMPLE_IDS[index])) return false;
+  if (data.words.length !== OLD_SAMPLE_WORD_COUNT) return false;
+  if (data.words.some((word) => !OLD_SAMPLE_IDS.includes(word.notebookId))) return false;
+  if (data.words.some((word) => !/^nb-(n3|n2|work|daily|weak)-\d\d$/.test(word.id))) return false;
+  return ![...data.notebooks, ...data.words].some((item) => item.updatedAt !== item.createdAt);
+}
+
 function createSeedState() {
-  const notebooks = [
-    ['nb-n3', '日本語 N3', 'sage', 4],
-    ['nb-n2', '日本語 N2', 'milk', 3],
-    ['nb-work', '仕事の日本語', 'sky', 2],
-    ['nb-daily', '日常会話', 'blush', 1],
-    ['nb-weak', '苦手な単語', 'lemon', 0],
-  ].map(([id, title, color, offset]) => {
-    const createdAt = notebookStamp(offset);
-    return { id, title, color, createdAt, updatedAt: createdAt };
-  });
-
-  const words = [
-    ...seedWords('nb-n3', notebookStamp(4), [
-      ['禁止', 'きんし', '禁止進入', null],
-      ['危ない', 'あぶない', '危險', null],
-      ['静か', 'しずか', '安靜', null],
-      ['危険', 'きけん', '危險', 'pink'],
-      ['経験', 'けいけん', '經驗', null],
-      ['続ける', 'つづける', '持續', 'pink'],
-      ['調べる', 'しらべる', '查詢', null],
-      ['案内', 'あんない', '引導、介紹', null],
-      ['準備', 'じゅんび', '準備', null],
-      ['約束', 'やくそく', '約定', null],
-      ['遠慮', 'えんりょ', '客氣、遠慮', 'yellow'],
-      ['丁寧', 'ていねい', '禮貌、仔細', 'yellow'],
-      ['複雑', 'ふくざつ', '複雜', 'yellow'],
-      ['簡単', 'かんたん', '簡單', 'green'],
-      ['必要', 'ひつよう', '必要', 'green'],
-      ['便利', 'べんり', '方便', 'green'],
-      ['不便', 'ふべん', '不方便', null],
-      ['安全', 'あんぜん', '安全', 'green'],
-      ['注意', 'ちゅうい', '注意', null],
-      ['説明', 'せつめい', '說明', null],
-      ['参加', 'さんか', '參加', null],
-      ['予定', 'よてい', '預定', 'green'],
-      ['連絡', 'れんらく', '聯絡', null],
-      ['確認', 'かくにん', '確認', 'green'],
-      ['反対', 'はんたい', '反對', null],
-      ['賛成', 'さんせい', '贊成', null],
-      ['理由', 'りゆう', '理由', null],
-      ['原因', 'げんいん', '原因', 'yellow'],
-      ['結果', 'けっか', '結果', null],
-      ['方法', 'ほうほう', '方法', null],
-    ]),
-    ...seedWords('nb-n2', notebookStamp(3), [
-      ['影響', 'えいきょう', '影響', 'green'],
-      ['改善', 'かいぜん', '改善', 'green'],
-      ['増加', 'ぞうか', '增加', 'green'],
-      ['減少', 'げんしょう', '減少', 'green'],
-      ['維持', 'いじ', '維持', 'green'],
-      ['実現', 'じつげん', '實現', 'green'],
-      ['提案', 'ていあん', '提案', 'green'],
-      ['議論', 'ぎろん', '議論', 'green'],
-      ['判断', 'はんだん', '判斷', 'green'],
-      ['責任', 'せきにん', '責任', 'green'],
-      ['協力', 'きょうりょく', '協力', null],
-      ['貢献', 'こうけん', '貢獻', null],
-      ['解決', 'かいけつ', '解決', null],
-      ['課題', 'かだい', '課題', null],
-      ['状況', 'じょうきょう', '狀況', null],
-      ['傾向', 'けいこう', '傾向', null],
-      ['特徴', 'とくちょう', '特徵', null],
-      ['比較', 'ひかく', '比較', null],
-      ['関連', 'かんれん', '相關', null],
-      ['条件', 'じょうけん', '條件', null],
-    ]),
-    ...seedWords('nb-work', notebookStamp(2), [
-      ['会議', 'かいぎ', '會議', 'green'],
-      ['資料', 'しりょう', '資料', 'green'],
-      ['報告', 'ほうこく', '報告', 'green'],
-      ['提出', 'ていしゅつ', '提交', null],
-      ['締め切り', 'しめきり', '截止', 'pink'],
-      ['残業', 'ざんぎょう', '加班', null],
-      ['出勤', 'しゅっきん', '上班', null],
-      ['退勤', 'たいきん', '下班', null],
-      ['取引先', 'とりひきさき', '客戶、往來對象', null],
-      ['見積もり', 'みつもり', '估價', 'yellow'],
-      ['請求書', 'せいきゅうしょ', '請款單', 'yellow'],
-      ['納期', 'のうき', '交期', null],
-      ['在宅', 'ざいたく', '在家', null],
-      ['担当', 'たんとう', '負責', 'green'],
-      ['共有', 'きょうゆう', '共享', null],
-      ['確認事項', 'かくにんじこう', '需要確認的事項', null],
-    ]),
-    ...seedWords('nb-daily', notebookStamp(1), [
-      ['朝食', 'ちょうしょく', '早餐', 'green'],
-      ['通勤', 'つうきん', '通勤', 'green'],
-      ['買い物', 'かいもの', '購物', 'green'],
-      ['天気', 'てんき', '天氣', 'green'],
-      ['洗濯', 'せんたく', '洗衣服', null],
-      ['掃除', 'そうじ', '打掃', 'green'],
-      ['料理', 'りょうり', '做菜', 'green'],
-      ['休憩', 'きゅうけい', '休息', 'green'],
-      ['散歩', 'さんぽ', '散步', 'green'],
-      ['予約', 'よやく', '預約', null],
-      ['忘れ物', 'わすれもの', '遺失物', null],
-      ['元気', 'げんき', '精神好、健康', 'green'],
-    ]),
-    ...seedWords('nb-weak', notebookStamp(0), [
-      ['似合う', 'にあう', '適合、相襯', 'pink'],
-      ['相槌', 'あいづち', '應和、附和', 'pink'],
-      ['微妙', 'びみょう', '微妙、有點不對勁', 'yellow'],
-      ['適当', 'てきとう', '隨便、適當', 'yellow'],
-      ['面倒', 'めんどう', '麻煩', 'yellow'],
-      ['申し訳ない', 'もうしわけない', '不好意思、抱歉', 'pink'],
-      ['頑張る', 'がんばる', '加油、努力', 'green'],
-      ['気を遣う', 'きをつかう', '看場合說話、顧慮對方', 'pink'],
-    ]),
-  ];
-
+  const createdAt = new Date().toISOString();
+  const notebooks = [{
+    id: 'nb-starter',
+    title: '日本語の単語帳',
+    color: 'sage',
+    createdAt,
+    updatedAt: createdAt,
+  }];
+  const words = seedWords('nb-starter', createdAt, [
+    ['禁止', 'きんし', '', null],
+    ['危ない', 'あぶない', '', null],
+    ['静か', 'しずか', '', null],
+    ['危険', 'きけん', '', null],
+    ['練習', 'れんしゅう', '', null],
+  ]);
   return { version: 1, notebooks, words, practiceLogs: [] };
 }
 
@@ -279,6 +193,10 @@ function load() {
   }
   try {
     memory = normalizeState(JSON.parse(raw));
+    if (isUntouchedSample(memory)) {
+      memory = createSeedState();
+      persist();
+    }
   } catch {
     memory = createSeedState();
     persist();
