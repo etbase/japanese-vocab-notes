@@ -36,6 +36,10 @@ html.is-compact .word-line {
   padding-left: 0;
 }
 
+html.is-compact .row-more {
+  opacity: 1;
+}
+
 html.is-compact .word-actions .text-button,
 html.is-compact .answer-tools .text-button {
   min-height: 24px;

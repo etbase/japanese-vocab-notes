@@ -83,8 +83,8 @@ function cleanWord(input, { strict = false } = {}) {
   const notebookId = String(input.notebookId ?? '').trim();
   const kanji = String(input.kanji ?? '').trim().slice(0, 40);
   const hiragana = normalizeText(input.hiragana).slice(0, 80);
-  if (!id || !notebookId || !kanji || !hiragana) return null;
-  if (strict && !isHiragana(hiragana)) return null;
+  if (!id || !notebookId) return null;
+  if (strict && hiragana && !isHiragana(hiragana)) return null;
   const highlight = HIGHLIGHTS.has(input.highlight) ? input.highlight : null;
   const createdAt = String(input.createdAt || nowIso());
   const order = Number.isFinite(input.order) ? Math.max(0, Math.floor(input.order)) : 0;
@@ -287,9 +287,8 @@ export async function addWords(notebookId, entries) {
   const incoming = Array.isArray(entries) ? entries : [];
   if (!incoming.length) return { ok: false, message: '単語を入力してください' };
   for (const entry of incoming) {
-    const kanji = String(entry?.kanji ?? '').trim();
     const hiragana = normalizeText(entry?.hiragana);
-    if (!kanji || !isHiragana(hiragana)) {
+    if (hiragana && !isHiragana(hiragana)) {
       return { ok: false, message: '読みはひらがなで書いてください' };
     }
   }
@@ -326,10 +325,7 @@ export async function updateWord(wordId, patch) {
   const state = load();
   const current = state.words.find((word) => word.id === wordId);
   if (!current) return { ok: false, message: '単語が見つかりません' };
-  const nextHiragana = patch.hiragana === undefined ? current.hiragana : patch.hiragana;
-  if (!isHiragana(nextHiragana)) {
-    return { ok: false, message: '読みはひらがなで書いてください' };
-  }
+  const nextHiragana = patch.hiragana === undefined ? current.hiragana : normalizeText(patch.hiragana);
   const next = cleanWord(
     {
       ...current,
@@ -339,7 +335,7 @@ export async function updateWord(wordId, patch) {
       highlight: patch.highlight === undefined ? current.highlight : patch.highlight,
       updatedAt: nowIso(),
     },
-    { strict: true },
+    { strict: false },
   );
   if (!next) return { ok: false, message: '単語を入力してください' };
   Object.assign(current, next);
@@ -347,11 +343,89 @@ export async function updateWord(wordId, patch) {
   return { ok: true, word: copyWord(current) };
 }
 
+function wordsInNotebook(state, notebookId) {
+  return state.words
+    .filter((word) => word.notebookId === notebookId)
+    .sort((a, b) => a.order - b.order || String(a.createdAt).localeCompare(String(b.createdAt)));
+}
+
+function renumber(list) {
+  list.forEach((word, index) => {
+    word.order = index;
+  });
+}
+
+function blankWord(notebookId, order, timestamp) {
+  return {
+    id: createId(),
+    notebookId,
+    kanji: '',
+    hiragana: '',
+    note: '',
+    highlight: null,
+    order,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+export async function ensureWordAt(notebookId, index, patch = {}) {
+  const state = load();
+  if (!state.notebooks.some((notebook) => notebook.id === notebookId)) {
+    return { ok: false, message: 'ノートが見つかりません' };
+  }
+  const hiragana = patch.hiragana === undefined ? undefined : normalizeText(patch.hiragana);
+  const list = wordsInNotebook(state, notebookId);
+  renumber(list);
+  const target = Math.max(0, Math.floor(index));
+  const timestamp = nowIso();
+  while (list.length <= target) {
+    const created = blankWord(notebookId, list.length, timestamp);
+    state.words.push(created);
+    list.push(created);
+  }
+  const current = list[target];
+  const next = cleanWord(
+    {
+      ...current,
+      kanji: patch.kanji === undefined ? current.kanji : patch.kanji,
+      hiragana: hiragana === undefined ? current.hiragana : hiragana,
+      note: patch.note === undefined ? current.note : patch.note,
+      highlight: patch.highlight === undefined ? current.highlight : patch.highlight,
+      updatedAt: timestamp,
+    },
+    { strict: false },
+  );
+  if (!next) return { ok: false, message: '保存できませんでした' };
+  Object.assign(current, next);
+  persist();
+  return { ok: true, word: copyWord(current) };
+}
+
+export async function insertWordAt(notebookId, index) {
+  const state = load();
+  if (!state.notebooks.some((notebook) => notebook.id === notebookId)) {
+    return { ok: false, message: 'ノートが見つかりません' };
+  }
+  const list = wordsInNotebook(state, notebookId);
+  renumber(list);
+  const target = Math.max(0, Math.min(Math.floor(index), list.length));
+  list.forEach((word, position) => {
+    word.order = position < target ? position : position + 1;
+  });
+  const word = blankWord(notebookId, target, nowIso());
+  state.words.push(word);
+  persist();
+  return { ok: true, word: copyWord(word) };
+}
+
 export async function deleteWord(wordId) {
   const state = load();
-  const exists = state.words.some((word) => word.id === wordId);
-  if (!exists) return { ok: false, message: '単語が見つかりません' };
+  const current = state.words.find((word) => word.id === wordId);
+  if (!current) return { ok: false, message: '単語が見つかりません' };
+  const notebookId = current.notebookId;
   state.words = state.words.filter((word) => word.id !== wordId);
+  renumber(wordsInNotebook(state, notebookId));
   persist();
   return { ok: true };
 }

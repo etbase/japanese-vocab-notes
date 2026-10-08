@@ -31,6 +31,24 @@ export function pageCount(words) {
   return Math.max(1, Math.ceil(words.length / PAGE_SIZE));
 }
 
+export function isBlankWord(word) {
+  return !String(word?.kanji ?? '').trim() && !String(word?.hiragana ?? '').trim();
+}
+
+/**
+ * 最後一頁寫滿時多留一頁空白。
+ * 電腦版會一併打開這一頁的對頁，方便在攤開的兩頁上繼續寫。
+ * 對頁之外不再自動加頁，避免空白頁一直增加。
+ */
+export function editablePageLimit(words, { compact = false } = {}) {
+  const count = words?.length ?? 0;
+  if (count === 0) return compact ? 1 : 2;
+  const content = Math.ceil(count / PAGE_SIZE);
+  const trailing = count % PAGE_SIZE === 0 ? content + 1 : content;
+  if (compact || count % PAGE_SIZE === 0) return trailing;
+  return trailing % 2 === 1 ? trailing + 1 : trailing;
+}
+
 /** 超出範圍時回傳空陣列，避免空白對頁重複顯示最後一頁。 */
 export function wordsForPage(words, page) {
   const sorted = sortWords(words ?? []);
@@ -77,7 +95,7 @@ export function spreadFor(page, total, { compact = false } = {}) {
 }
 
 export function notebookStats(words) {
-  const list = words ?? [];
+  const list = (words ?? []).filter((word) => !isBlankWord(word));
   const total = list.length;
   const remembered = list.filter((word) => word.highlight === 'green').length;
   const percent = total === 0 ? 0 : Math.round((remembered / total) * 100);

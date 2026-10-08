@@ -1,7 +1,7 @@
 /** 書架與筆記本內頁。使用者輸入一律以 textContent 寫入。 */
 
 import { judgeAnswer } from './practice.js';
-import { PAGE_SIZE, notebookStats, pageCount, spreadFor, wordsForPage } from './vocabulary.js';
+import { PAGE_SIZE, notebookStats, pageCount, sortWords, spreadFor, wordsForPage } from './vocabulary.js';
 
 export const COVER_COLORS = [
   { id: 'sage', label: 'セージ' },
@@ -166,9 +166,12 @@ export function renderNotebook(container, options) {
     onHighlight,
     onTogglePen,
     onSelectPen,
-    onAddWord,
-    onEditWord,
     onDeleteWord,
+    onEditLine,
+    onAdvance,
+    onInsertLine,
+    onSaveNote,
+    pageLimit,
     onStartPractice,
     onStartFocus,
     onExitStudy,
@@ -181,7 +184,8 @@ export function renderNotebook(container, options) {
   const stats = notebookStats(totalWords || words);
   const studying = study?.kind === 'practice';
   const focusing = study?.kind === 'focus';
-  const view = spreadFor(page, pageCount(words), { compact });
+  const view = spreadFor(page, pageLimit || pageCount(words), { compact });
+  closeLineMenus();
 
   const screen = el('section', 'notebook-screen');
   const toolbar = el('div', 'notebook-toolbar');
@@ -210,17 +214,13 @@ export function renderNotebook(container, options) {
       tools.append(done);
     }
   } else {
-    const add = el('button', 'btn btn-primary', '＋ 単語を追加');
-    add.type = 'button';
-    add.id = 'add-word';
-    add.addEventListener('click', onAddWord);
     const practice = el('button', 'btn btn-ghost', '練習する');
     practice.type = 'button';
     practice.addEventListener('click', onStartPractice);
     const focus = el('button', 'btn btn-ghost', '集中練習');
     focus.type = 'button';
     focus.addEventListener('click', onStartFocus);
-    tools.append(add, practice, focus);
+    tools.append(practice, focus);
   }
 
   const book = el('div', 'book');
@@ -248,8 +248,12 @@ export function renderNotebook(container, options) {
         revealed,
         hints,
         onHighlight,
-        onEditWord,
         onDeleteWord,
+        onEditLine,
+        onAdvance,
+        onInsertLine,
+        onSaveNote,
+        pageLimit,
       }));
     });
     book.append(spread);
@@ -258,6 +262,7 @@ export function renderNotebook(container, options) {
   const pager = el('div', 'pager');
   const prev = el('button', 'btn btn-ghost', '前のページ');
   prev.type = 'button';
+  prev.dataset.pager = 'prev';
   prev.disabled = focusing || !view.hasPrev;
   prev.addEventListener('click', () => onStep('prev'));
 
@@ -271,6 +276,7 @@ export function renderNotebook(container, options) {
 
   const next = el('button', 'btn btn-ghost', '次のページ');
   next.type = 'button';
+  next.dataset.pager = 'next';
   next.disabled = focusing || !view.hasNext;
   next.addEventListener('click', () => onStep('next'));
   pager.append(prev, status, next);
@@ -318,7 +324,7 @@ function renderPen(pen, onTogglePen, onSelectPen) {
 }
 
 function renderPage(options) {
-  const { notebook, words, pageNumber, side, showTitle } = options;
+  const { notebook, words, pageNumber, side, showTitle, studying, pageLimit } = options;
   const page = el('article', `page page-${side}`);
   page.dataset.side = side;
   page.dataset.page = String(pageNumber);
@@ -329,15 +335,24 @@ function renderPage(options) {
   page.append(head);
 
   const list = el('ol', 'word-lines');
+  const editable = !studying && pageNumber <= (pageLimit || pageCount(words));
+  const sorted = sortWords(words);
   const pageWords = wordsForPage(words, pageNumber);
   for (let index = 0; index < PAGE_SIZE; index += 1) {
-    const word = pageWords[index];
-    const line = el('li', word ? 'word-line has-word' : 'word-line');
-    if (!word) {
+    const slot = (pageNumber - 1) * PAGE_SIZE + index;
+    const word = studying ? pageWords[index] : (editable ? sorted[slot] || null : null);
+    const line = el('li', 'word-line');
+    if (studying) {
+      if (!word) line.setAttribute('aria-hidden', 'true');
+      else line.append(renderWord(word, options));
+    } else if (!editable) {
       line.setAttribute('aria-hidden', 'true');
     } else {
-      if (word.note) line.title = word.note;
-      line.append(renderWord(word, options));
+      line.classList.add('is-editable');
+      if (word && (word.kanji || word.hiragana)) line.classList.add('has-word');
+      line.dataset.slot = String(slot);
+      if (word?.id) line.dataset.wordId = word.id;
+      line.append(renderEditableWord(word, slot, options));
     }
     list.append(line);
   }
@@ -347,7 +362,7 @@ function renderPage(options) {
 }
 
 function renderWord(word, options) {
-  const { flashWordId, pen, studying, answers, revealed, hints, onHighlight, onEditWord, onDeleteWord } = options;
+  const { flashWordId, pen, studying, answers, revealed, hints, onHighlight } = options;
   const fragment = document.createDocumentFragment();
   const fresh = flashWordId === word.id;
   const kanji = el('span', 'word-kanji hand');
@@ -377,26 +392,280 @@ function renderWord(word, options) {
       tools.append(hint, answer);
     }
     fragment.append(tools);
-  } else {
-    const actions = el('div', 'word-actions');
-    const edit = el('button', 'text-button', '編集');
-    edit.type = 'button';
-    edit.setAttribute('aria-label', `${word.kanji}を編集`);
-    edit.addEventListener('click', (event) => {
-      event.stopPropagation();
-      onEditWord(word);
-    });
-    const remove = el('button', 'text-button text-button-quiet', '削除');
-    remove.type = 'button';
-    remove.setAttribute('aria-label', `${word.kanji}を削除`);
-    remove.addEventListener('click', (event) => {
-      event.stopPropagation();
-      onDeleteWord(word);
-    });
-    actions.append(edit, remove);
-    fragment.append(actions);
   }
   return fragment;
+}
+
+function renderEditableWord(word, slot, options) {
+  const fragment = document.createDocumentFragment();
+  const kanji = buildPaperField(word, slot, 'kanji', options);
+  const reading = buildPaperField(word, slot, 'hiragana', options);
+  fragment.append(kanji, reading, buildLineTools(word, slot, options));
+  bindPaperLine(kanji, reading, slot, options);
+  return fragment;
+}
+
+function buildPaperField(word, slot, field, options) {
+  const { flashWordId, pen } = options;
+  const value = field === 'kanji' ? (word?.kanji || '') : (word?.hiragana || '');
+  const cell = el('span', field === 'kanji' ? 'word-kanji hand' : 'word-reading hand');
+  cell.translate = false;
+  const wrap = el('span', 'paper-field');
+  const fresh = flashWordId && flashWordId === word?.id;
+  if (word?.highlight && value) {
+    wrap.classList.add('mark', `mark-${word.highlight}`);
+    if (fresh) wrap.classList.add('is-fresh');
+  }
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'paper-input';
+  input.lang = 'ja';
+  input.autocomplete = 'off';
+  input.autocapitalize = 'off';
+  input.spellcheck = false;
+  input.autocorrect = 'off';
+  input.enterKeyHint = 'next';
+  input.maxLength = field === 'kanji' ? 40 : 80;
+  input.dataset.field = field;
+  input.value = value;
+  input.setAttribute('aria-label', `${slot + 1}行目の${field === 'kanji' ? '漢字・単語' : 'ひらがな'}`);
+  if (pen?.active) input.readOnly = true;
+  fitPaperInput(input);
+  wrap.append(input);
+  cell.append(wrap);
+  cell.addEventListener('mousedown', (event) => {
+    if (pen?.active) {
+      event.preventDefault();
+      return;
+    }
+    if (event.target === input) return;
+    event.preventDefault();
+    input.focus();
+  });
+  cell.addEventListener('click', () => {
+    if (!pen?.active || !pen.tool || !word?.id) return;
+    options.onHighlight?.(word.id, pen.tool === 'erase' ? null : pen.tool);
+  });
+  return cell;
+}
+
+function fitPaperInput(input) {
+  const length = Math.max(Array.from(input.value).length, 3);
+  input.style.width = `${length + 0.35}em`;
+}
+
+function bindPaperLine(kanjiCell, readingCell, slot, options) {
+  const kanji = kanjiCell.querySelector('input');
+  const reading = readingCell.querySelector('input');
+  let composing = false;
+  const emit = () => {
+    if (composing) return;
+    options.onEditLine?.({
+      slot,
+      kanji: kanji.value,
+      hiragana: reading.value,
+    });
+  };
+  [kanji, reading].forEach((input) => {
+    input.addEventListener('compositionstart', () => {
+      composing = true;
+    });
+    input.addEventListener('compositionend', () => {
+      composing = false;
+      fitPaperInput(input);
+      emit();
+    });
+    input.addEventListener('input', (event) => {
+      fitPaperInput(input);
+      if (composing || event.isComposing) return;
+      emit();
+    });
+    input.addEventListener('keydown', (event) => {
+      if (options.pen?.active) return;
+      if (event.isComposing || composing || event.keyCode === 229) return;
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      emit();
+      if (input.dataset.field === 'kanji') {
+        reading.focus();
+        return;
+      }
+      const next = document.querySelector(`[data-slot="${slot + 1}"] [data-field="kanji"]`);
+      if (next) {
+        next.focus();
+        return;
+      }
+      const line = input.closest('.word-line');
+      const hasText = kanji.value.trim() || reading.value.trim() || line?.dataset.wordId;
+      if (hasText) options.onAdvance?.(slot + 1);
+    });
+  });
+}
+
+function buildLineTools(word, slot, options) {
+  const tools = el('div', 'line-tools');
+  const noteSlot = el('span', 'note-slot');
+  if (word?.note) noteSlot.append(buildNoteDot(word.note));
+  const more = el('button', 'row-more', '⋯');
+  more.type = 'button';
+  more.tabIndex = -1;
+  more.setAttribute('aria-label', '行の操作');
+  more.setAttribute('aria-expanded', 'false');
+  more.setAttribute('aria-haspopup', 'menu');
+  more.addEventListener('mousedown', (event) => event.stopPropagation());
+  more.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleRowMenu(more, slot, options);
+  });
+  tools.append(noteSlot, more);
+  return tools;
+}
+
+export function syncNoteDot(slot, note) {
+  const line = document.querySelector(`[data-slot="${slot}"]`);
+  const slotNode = line?.querySelector('.note-slot');
+  if (!slotNode) return;
+  const text = String(note || '');
+  const dot = slotNode.querySelector('.note-dot');
+  if (!text.trim()) {
+    dot?.remove();
+    return;
+  }
+  if (!dot) {
+    slotNode.append(buildNoteDot(text));
+    return;
+  }
+  dot.dataset.note = text;
+}
+
+function buildNoteDot(note) {
+  const dot = el('button', 'note-dot');
+  dot.type = 'button';
+  dot.tabIndex = -1;
+  dot.setAttribute('aria-label', 'メモを見る');
+  dot.dataset.note = note;
+  dot.addEventListener('mousedown', (event) => event.stopPropagation());
+  dot.addEventListener('mouseenter', () => showNoteTip(dot));
+  dot.addEventListener('mouseleave', () => {
+    if (!dot.classList.contains('is-pinned')) hideNoteTip();
+  });
+  dot.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (document.querySelector('.note-tip')) {
+      hideNoteTip();
+      dot.classList.remove('is-pinned');
+      return;
+    }
+    dot.classList.add('is-pinned');
+    showNoteTip(dot);
+  });
+  return dot;
+}
+
+function showNoteTip(dot) {
+  hideNoteTip();
+  const tip = el('div', 'note-tip', dot.dataset.note || '');
+  tip.setAttribute('role', 'tooltip');
+  document.body.append(tip);
+  const rect = dot.getBoundingClientRect();
+  tip.style.top = `${rect.bottom + 6}px`;
+  tip.style.left = `${Math.max(8, rect.left - 8)}px`;
+}
+
+function hideNoteTip() {
+  document.querySelectorAll('.note-tip').forEach((node) => node.remove());
+}
+
+function toggleRowMenu(button, slot, options) {
+  const open = button.getAttribute('aria-expanded') === 'true';
+  closeLineMenus();
+  if (open) return;
+  button.setAttribute('aria-expanded', 'true');
+  const menu = el('div', 'row-popover');
+  menu.setAttribute('role', 'menu');
+  const remove = menuButton('この行を削除', () => options.onDeleteWord?.(slot));
+  const insert = menuButton('下に行を追加', () => options.onInsertLine?.(slot));
+  const note = menuButton('メモを編集', () => openNotePopover(button, slot, options));
+  menu.append(remove, insert, note);
+  document.body.append(menu);
+  const rect = button.getBoundingClientRect();
+  const width = 168;
+  menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 150)}px`;
+  menu.style.left = `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`;
+}
+
+function menuButton(label, action) {
+  const button = el('button', 'row-popover-item', label);
+  button.type = 'button';
+  button.setAttribute('role', 'menuitem');
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeLineMenus();
+    action();
+  });
+  return button;
+}
+
+export function closeLineMenus() {
+  document.querySelectorAll('.note-popover').forEach((node) => {
+    if (typeof node.saveNote === 'function') node.saveNote();
+    node.remove();
+  });
+  document.querySelectorAll('.row-popover, .note-tip').forEach((node) => node.remove());
+  document.querySelectorAll('.row-more[aria-expanded="true"]').forEach((button) => {
+    button.setAttribute('aria-expanded', 'false');
+  });
+  document.querySelectorAll('.note-dot.is-pinned').forEach((dot) => dot.classList.remove('is-pinned'));
+}
+
+function openNotePopover(anchor, slot, options) {
+  closeLineMenus();
+  const line = document.querySelector(`[data-slot="${slot}"]`);
+  const pop = el('div', 'note-popover');
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', 'メモ');
+  const label = el('label', 'note-popover-label', 'メモ');
+  const area = document.createElement('textarea');
+  area.className = 'note-popover-input';
+  area.lang = 'ja';
+  area.rows = 3;
+  area.maxLength = 500;
+  area.autocomplete = 'off';
+  area.spellcheck = false;
+  area.value = line?.querySelector('.note-dot')?.dataset.note || '';
+  label.append(area);
+  pop.append(label);
+  let composing = false;
+  let timer = 0;
+  const save = () => {
+    if (composing) return;
+    options.onSaveNote?.({ slot, note: area.value });
+  };
+  pop.saveNote = save;
+  document.body.append(pop);
+  const rect = anchor.getBoundingClientRect();
+  pop.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 180)}px`;
+  pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 236))}px`;
+  area.addEventListener('compositionstart', () => {
+    composing = true;
+  });
+  area.addEventListener('compositionend', () => {
+    composing = false;
+    save();
+  });
+  area.addEventListener('input', (event) => {
+    if (composing || event.isComposing) return;
+    clearTimeout(timer);
+    timer = setTimeout(save, 400);
+  });
+  area.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      save();
+      pop.remove();
+    }
+  });
+  area.focus();
 }
 
 function bindPenTarget(node, word, pen, onHighlight) {
