@@ -156,7 +156,8 @@ function cleanWord(input, { strict = false } = {}) {
 }
 
 const STARTER_ID = 'nb-starter';
-const STARTER_WORDS_VERSION = 2;
+const STARTER_WORDS_VERSION = 3;
+const LEGACY_STARTER_HEADS = new Set(['禁止', '危ない', '静か', '危険', '練習', '貯める']);
 
 function starterWords(createdAt) {
   return STARTER_WORD_ROWS.map((row, order) => ({
@@ -180,17 +181,88 @@ function starterWords(createdAt) {
   }));
 }
 
+function correctStarterWord(word) {
+  if (word.kanji === '安静（な）') {
+    word.kanji = '安静';
+    word.hiragana = 'あんせい';
+    word.translation = '安靜、靜養';
+  } else if (word.kanji === '御～') {
+    word.hiragana = 'お・ご';
+    word.translation = '表示尊敬或禮貌的前綴';
+  } else if (word.kanji === '御手洗い') {
+    word.kanji = 'お手洗い';
+    word.hiragana = 'おてあらい';
+    word.translation = '洗手間、廁所';
+  } else if (word.kanji === '開放厳禁') {
+    word.hiragana = 'かいほうげんきん';
+    word.translation = '嚴禁開放、請保持關閉';
+  } else if (word.kanji === '備え付け（の）') {
+    word.kanji = '備え付け';
+    word.hiragana = 'そなえつけ';
+    word.translation = '附設、配備';
+  } else if (word.kanji === '精算') {
+    if (word.hiragana === 'せいさん' && word.translation === '結算、補票結算') return false;
+    word.hiragana = 'せいさん';
+    if (!String(word.translation || '').trim()) word.translation = '結算、補票結算';
+  } else {
+    return false;
+  }
+  word.translationEdited = true;
+  word.readingEdited = true;
+  word.updatedAt = nowIso();
+  return true;
+}
+
+function appendStarterRows(state, rows, createdAt) {
+  const owned = state.words.filter((word) => word.notebookId === STARTER_ID);
+  const seen = new Set(owned.map((word) => word.kanji));
+  let order = owned.reduce((max, word) => Math.max(max, Number(word.order) || 0), -1) + 1;
+  const usedIds = new Set(state.words.map((word) => word.id));
+  rows.forEach((row, index) => {
+    if (seen.has(row[0])) return;
+    let id = `${STARTER_ID}-n${String(index + 1).padStart(3, '0')}`;
+    while (usedIds.has(id)) id = `${id}-x`;
+    const clean = cleanWord({
+      id,
+      notebookId: STARTER_ID,
+      kanji: row[0],
+      hiragana: row[1],
+      note: '',
+      translation: row[2],
+      translationEdited: true,
+      readingEdited: true,
+      order,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    if (!clean) return;
+    state.words.push(clean);
+    seen.add(clean.kanji);
+    usedIds.add(clean.id);
+    order += 1;
+  });
+}
+
 function migrateStarterNotebook(state) {
   if ((state.starterWordsVersion || 0) >= STARTER_WORDS_VERSION) return false;
   state.starterWordsVersion = STARTER_WORDS_VERSION;
   const notebook = state.notebooks.find((item) => item.id === STARTER_ID);
   if (!notebook) return true;
   const createdAt = notebook.createdAt || nowIso();
-  state.words = state.words.filter((word) => word.notebookId !== STARTER_ID);
-  starterWords(createdAt).forEach((word) => {
-    const clean = cleanWord(word);
-    if (clean) state.words.push(clean);
-  });
+  const owned = state.words.filter((word) => word.notebookId === STARTER_ID);
+  const hasCurriculum = owned.some((word) => word.kanji === '一万円札' || word.kanji === '禁煙');
+  const legacyOnly = owned.length > 0 && owned.every((word) => LEGACY_STARTER_HEADS.has(word.kanji));
+  if (!hasCurriculum && (owned.length === 0 || legacyOnly)) {
+    state.words = state.words.filter((word) => word.notebookId !== STARTER_ID);
+    starterWords(createdAt).forEach((word) => {
+      const clean = cleanWord(word);
+      if (clean) state.words.push(clean);
+    });
+    return true;
+  }
+  owned.forEach(correctStarterWord);
+  const anchor = STARTER_WORD_ROWS.findIndex((row) => row[0] === '一万円札');
+  appendStarterRows(state, STARTER_WORD_ROWS.slice(anchor + 1), nowIso());
   return true;
 }
 
