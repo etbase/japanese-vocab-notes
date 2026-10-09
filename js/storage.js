@@ -76,6 +76,7 @@ function cleanNotebook(input) {
     type: input.type === 'katakana' ? 'katakana' : 'kanji',
     autoLookup: input.autoLookup === undefined ? true : Boolean(input.autoLookup),
     showTranslation: input.showTranslation === undefined ? true : Boolean(input.showTranslation),
+    locked: input.locked === undefined ? true : Boolean(input.locked),
     createdAt,
     updatedAt: String(input.updatedAt || createdAt),
   };
@@ -423,6 +424,7 @@ export async function updateNotebook(id, patch) {
     type: patch.type === undefined ? current.type : patch.type,
     autoLookup: patch.autoLookup === undefined ? current.autoLookup : patch.autoLookup,
     showTranslation: patch.showTranslation === undefined ? current.showTranslation : patch.showTranslation,
+    locked: patch.locked === undefined ? current.locked : Boolean(patch.locked),
     updatedAt: nowIso(),
   });
   if (!next) return { ok: false, message: 'ノートの名前を入力してください' };

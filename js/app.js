@@ -35,6 +35,7 @@ import {
   isHiragana,
   notebookStats,
   pageCount,
+  pageForWord,
   spreadFor,
   wordsForPage,
 } from './vocabulary.js';
@@ -212,6 +213,7 @@ function stampLineIds() {
 }
 
 function saveSlotNow(slot, kanji, hiragana, { lookup = false } = {}) {
+  if (isLocked()) return;
   const line = document.querySelector(`[data-slot="${slot}"]`);
   const id = line?.dataset.wordId || '';
   const nextKanji = String(kanji ?? '').trim();
@@ -270,6 +272,7 @@ function scheduleGlossSave(slot, field, value) {
 }
 
 function saveGlossNow(slot, field, value) {
+  if (isLocked()) return;
   const line = document.querySelector(`[data-slot="${slot}"]`);
   const id = line?.dataset.wordId || '';
   const text = String(value ?? '').trim();
@@ -327,6 +330,7 @@ function enqueueTranslation(task) {
 }
 
 function assistWord(wordId, head) {
+  if (isLocked()) return;
   fillReading(wordId, head);
   enqueueTranslation(() => translateWord(wordId, head));
 }
@@ -425,7 +429,7 @@ function flashStatus(message, { sticky = false, duration = 3200 } = {}) {
 }
 
 async function translateMissing() {
-  if (batchRunning) return;
+  if (batchRunning || isLocked()) return;
   flushLineEdits();
   flushGlossEdits();
   const notebook = currentNotebook();
@@ -535,13 +539,22 @@ function render() {
       renderShelfView(root, freshId);
     } else {
       const allWords = getWordsByNotebook(notebook.id);
+      if (state.study?.kind === 'focus' && state.study.wordsById) {
+        const fresh = new Map(allWords.map((word) => [word.id, word]));
+        state.study.wordIds.forEach((id) => {
+          const word = fresh.get(id);
+          if (word) state.study.wordsById[id] = word;
+        });
+      }
       const pool = state.study ? meaningfulWords(allWords) : allWords;
       const words = displayedWords(pool);
-      const view = spreadFor(state.page, pageLimitFor(allWords), { compact: isCompact() });
-      if (view.current !== state.page) {
-        state.page = view.current;
-        const hash = notebookHash(notebook.id, state.page);
-        if (location.hash !== hash) history.replaceState(null, '', hash);
+      if (state.study?.kind !== 'focus') {
+        const view = spreadFor(state.page, pageLimitFor(allWords), { compact: isCompact() });
+        if (view.current !== state.page) {
+          state.page = view.current;
+          const hash = notebookHash(notebook.id, state.page);
+          if (location.hash !== hash) history.replaceState(null, '', hash);
+        }
       }
       renderNotebook(root, {
         notebook,
@@ -561,6 +574,7 @@ function render() {
         onHighlight: changeHighlight,
         onTogglePen: togglePen,
         onSelectPen: selectPen,
+        onToggleLock: toggleLock,
         onDeleteWord: confirmDeleteLine,
         onEditLine: ({ slot, kanji, hiragana, lookup }) => {
           if (lookup) {
@@ -622,7 +636,11 @@ function renderShelfView(root, freshId) {
 }
 
 function step(direction) {
-  if (state.view !== 'notebook' || state.study?.kind === 'focus') return;
+  if (state.view !== 'notebook') return;
+  if (state.study?.kind === 'focus') {
+    stepFocus(direction);
+    return;
+  }
   flushLineEdits();
   const allWords = getWordsByNotebook(state.notebookId);
   const view = spreadFor(state.page, pageLimitFor(allWords), { compact: isCompact() });
@@ -637,8 +655,79 @@ function step(direction) {
   render();
 }
 
+function notebookWords() {
+  return getWordsByNotebook(state.notebookId);
+}
+
+function isLocked(notebook = currentNotebook()) {
+  return notebook?.locked !== false;
+}
+
+function focusPageOf(wordId, words = notebookWords()) {
+  return pageForWord(words, wordId);
+}
+
+function firstFocusIndexOnPage(study, words, page) {
+  const ids = new Set(wordsForPage(words, page).map((word) => word.id));
+  return study.wordIds.findIndex((id) => ids.has(id));
+}
+
+function adjacentFocusPage(study, words, page, direction) {
+  const total = pageCount(words);
+  for (let next = page + direction; next >= 1 && next <= total; next += direction) {
+    if (firstFocusIndexOnPage(study, words, next) >= 0) return next;
+  }
+  return 0;
+}
+
+function focusStartIndex(words, practiceList) {
+  const total = pageCount(words);
+  const view = spreadFor(state.page, total, { compact: isCompact() });
+  const ids = new Set(practiceList.map((word) => word.id));
+  const order = [];
+  for (let page = view.pages[0]; page <= total; page += 1) order.push(page);
+  for (let page = view.pages[0] - 1; page >= 1; page -= 1) order.push(page);
+  for (const page of order) {
+    const found = wordsForPage(words, page).find((word) => ids.has(word.id));
+    if (!found) continue;
+    return practiceList.findIndex((word) => word.id === found.id);
+  }
+  return 0;
+}
+
+function rememberNotebookPage(page) {
+  state.page = page;
+  const hash = notebookHash(state.notebookId, page);
+  if (location.hash !== hash) history.replaceState(null, '', hash);
+}
+
+function syncStudyPage() {
+  const study = state.study;
+  if (!study || study.kind !== 'focus' || study.finished) return;
+  const words = notebookWords();
+  const page = focusPageOf(study.wordIds[study.index], words);
+  if (page !== state.page) rememberNotebookPage(page);
+}
+
+function stepFocus(direction) {
+  const study = state.study;
+  if (!study || study.finished) return;
+  const words = notebookWords();
+  const current = focusPageOf(study.wordIds[study.index], words);
+  const page = adjacentFocusPage(study, words, current, direction === 'next' ? 1 : -1);
+  if (!page) return;
+  const index = firstFocusIndexOnPage(study, words, page);
+  if (index < 0) return;
+  study.index = index;
+  state.focusDraft = '';
+  state.skipSnapshot = true;
+  state.turn = direction;
+  rememberNotebookPage(page);
+  render();
+}
+
 async function changeHighlight(wordId, color, field) {
-  if (state.study) return;
+  if (state.study && state.study.kind !== 'focus') return;
   const target = field === 'hiragana' || field === 'reading' ? 'reading' : 'kanji';
   const result = await setHighlight(wordId, color, target);
   if (!result.ok) return;
@@ -668,13 +757,20 @@ function startPractice() {
 
 function startFocus() {
   if (currentNotebook()?.type === 'katakana') {
-    chooseStudy('focus');
+    chooseStudy('focus', { fromCurrentPage: true });
     return;
   }
-  beginStudy('focus', 'hiragana');
+  beginStudy('focus', 'hiragana', { fromCurrentPage: true });
 }
 
-function chooseStudy(kind) {
+function toggleLock() {
+  const notebook = currentNotebook();
+  if (!notebook) return;
+  updateNotebook(notebook.id, { locked: !isLocked(notebook) });
+  render();
+}
+
+function chooseStudy(kind, options = {}) {
   openModal({
     title: '練習',
     body: '練習の種類を選んでください。',
@@ -684,7 +780,7 @@ function chooseStudy(kind) {
         className: 'btn btn-primary',
         onClick: () => {
           closeModal({ restore: false });
-          beginStudy(kind, 'katakana');
+          beginStudy(kind, 'katakana', options);
         },
       },
       {
@@ -692,17 +788,18 @@ function chooseStudy(kind) {
         className: 'btn btn-ghost',
         onClick: () => {
           closeModal({ restore: false });
-          beginStudy(kind, 'zh');
+          beginStudy(kind, 'zh', options);
         },
       },
     ],
   });
 }
 
-function beginStudy(kind, script) {
+function beginStudy(kind, script, { fromCurrentPage = false } = {}) {
   flushLineEdits();
   flushGlossEdits();
-  const words = practiceWords(getWordsByNotebook(state.notebookId), script);
+  const stored = getWordsByNotebook(state.notebookId);
+  const words = practiceWords(stored, script);
   if (!words.length) {
     const body = script === 'zh'
       ? '中国語の訳がある単語がありません。'
@@ -719,18 +816,21 @@ function beginStudy(kind, script) {
   state.showResult = false;
   state.focusDraft = '';
   if (kind === 'focus') {
+    const index = fromCurrentPage ? focusStartIndex(stored, words) : 0;
     state.study = {
       kind: 'focus',
       script,
       wordIds: words.map((word) => word.id),
       wordsById: Object.fromEntries(words.map((word) => [word.id, word])),
-      index: 0,
+      index,
       wrong: 0,
       startedAt: Date.now(),
       finished: false,
       durationMs: 0,
     };
+    state.focusDraft = '';
     state.skipSnapshot = true;
+    rememberNotebookPage(focusPageOf(words[index].id, stored));
   } else {
     state.study = { kind: 'practice', reviewIds: null, script };
   }
@@ -754,6 +854,8 @@ function focusCorrect() {
       wrong: study.wrong,
       durationMs: study.durationMs,
     });
+  } else {
+    syncStudyPage();
   }
   render();
 }
@@ -788,7 +890,8 @@ function finishPractice() {
 
 function retryPractice() {
   if (state.study?.kind === 'focus') {
-    startFocus();
+    const script = state.study.script === 'zh' || state.study.script === 'katakana' ? state.study.script : 'hiragana';
+    beginStudy('focus', script);
     return;
   }
   state.skipSnapshot = true;
@@ -952,6 +1055,7 @@ function advanceToSlot(slot) {
 }
 
 function insertLine(slot) {
+  if (isLocked()) return;
   flushLineEdits();
   const words = getWordsByNotebook(state.notebookId);
   const index = Math.min(slot + 1, words.length);
@@ -965,6 +1069,7 @@ function insertLine(slot) {
 }
 
 function saveLineNote({ slot, note }) {
+  if (isLocked()) return;
   const line = document.querySelector(`[data-slot="${slot}"]`);
   const id = line?.dataset.wordId || '';
   const kanji = line?.querySelector('[data-field="kanji"]')?.value ?? '';
@@ -979,6 +1084,7 @@ function saveLineNote({ slot, note }) {
 }
 
 function confirmDeleteLine(slot) {
+  if (isLocked()) return;
   flushLineEdits();
   const word = getWordsByNotebook(state.notebookId)[slot];
   if (!word) return;
@@ -1206,7 +1312,6 @@ function bindKeys() {
   document.addEventListener('keydown', (event) => {
     if (state.view !== 'notebook') return;
     if (document.body.classList.contains('modal-open')) return;
-    if (state.study?.kind === 'focus') return;
     const target = event.target;
     if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) return;
     if (event.altKey || event.metaKey || event.ctrlKey) return;

@@ -160,6 +160,15 @@ function renderNewCard(onCreate) {
   return card;
 }
 
+function adjacentFocusPage(words, study, page, direction) {
+  const total = pageCount(words);
+  const ids = new Set(study?.wordIds || []);
+  for (let next = page + direction; next >= 1 && next <= total; next += direction) {
+    if (wordsForPage(words, next).some((word) => ids.has(word.id))) return next;
+  }
+  return 0;
+}
+
 export function renderNotebook(container, options) {
   const {
     notebook,
@@ -193,6 +202,7 @@ export function renderNotebook(container, options) {
     onReview,
     onFocusCorrect,
     onFocusWrong,
+    onToggleLock,
   } = options;
   const studying = study?.kind === 'practice';
   const focusing = study?.kind === 'focus';
@@ -210,15 +220,30 @@ export function renderNotebook(container, options) {
   title.tabIndex = -1;
   const summary = el('p', 'notebook-summary', notebookLabel(notebook, totalWords || words));
   heading.append(title, summary);
-  toolbar.append(back, heading, renderPen(pen, onTogglePen, onSelectPen));
+  const actions = el('div', 'toolbar-actions');
+  actions.append(renderLock(notebook, onToggleLock), renderPen(pen, onTogglePen, onSelectPen));
+  toolbar.append(back, heading, actions);
   if (pen?.active) screen.classList.add('is-pen-mode');
 
   const tools = el('div', 'notebook-tools');
+  const translationButton = (disabled = false) => {
+    const translation = el('button', notebook.showTranslation === false || disabled ? 'btn btn-ghost' : 'btn btn-ghost is-on', '翻訳');
+    translation.type = 'button';
+    translation.setAttribute('aria-pressed', disabled || notebook.showTranslation === false ? 'false' : 'true');
+    if (disabled) {
+      translation.disabled = true;
+      translation.title = 'この練習では訳が答えです';
+    } else {
+      translation.addEventListener('click', () => options.onToggleTranslation?.());
+    }
+    return translation;
+  };
   if (focusing || studying) {
     const backStudy = el('button', 'btn btn-ghost', 'ノートに戻る');
     backStudy.type = 'button';
     backStudy.addEventListener('click', onExitStudy);
     tools.append(backStudy);
+    if (focusing && !study.finished) tools.append(translationButton(study.script === 'zh'));
     if (studying && !showResult) {
       const done = el('button', 'btn btn-primary', 'できた');
       done.type = 'button';
@@ -226,30 +251,37 @@ export function renderNotebook(container, options) {
       tools.append(done);
     }
   } else {
-    const translation = el('button', notebook.showTranslation === false ? 'btn btn-ghost' : 'btn btn-ghost is-on', '翻訳');
-    translation.type = 'button';
-    translation.setAttribute('aria-pressed', notebook.showTranslation === false ? 'false' : 'true');
-    translation.addEventListener('click', () => options.onToggleTranslation?.());
     const translate = el('button', 'btn btn-ghost', '自動翻訳');
     translate.type = 'button';
+    translate.disabled = notebook.locked !== false;
     translate.addEventListener('click', () => options.onTranslateMissing?.());
     const practice = el('button', 'btn btn-ghost', '練習する');
     practice.type = 'button';
     practice.addEventListener('click', onStartPractice);
-    const focus = el('button', 'btn btn-ghost', '集中練習');
+    const focus = el('button', 'btn btn-ghost', '字卡練習');
     focus.type = 'button';
     focus.addEventListener('click', onStartFocus);
     const status = el('p', 'tool-status');
     status.id = 'tool-status';
     status.hidden = true;
-    tools.append(translation, translate, practice, focus, status);
+    tools.append(translationButton(), translate, practice, focus, status);
   }
 
   const book = el('div', 'book');
   if (focusing) {
     book.append(study.finished
       ? renderFocusResult(study, { onRetry, onExitStudy })
-      : renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, onFocusDraft: options.onFocusDraft }));
+      : renderFocusSession({
+        study,
+        notebook,
+        pen,
+        flashWordId,
+        focusDraft,
+        onFocusCorrect,
+        onFocusWrong,
+        onFocusDraft: options.onFocusDraft,
+        onHighlight,
+      }));
   } else {
     const spread = el('div', 'spread');
     if (turn === 'next') spread.classList.add('is-turning-next');
@@ -286,24 +318,25 @@ export function renderNotebook(container, options) {
   const prev = el('button', 'btn btn-ghost', '前のページ');
   prev.type = 'button';
   prev.dataset.pager = 'prev';
-  prev.disabled = focusing || !view.hasPrev;
+  const catalog = totalWords || words;
+  const focusPaging = focusing && !study.finished;
+  prev.disabled = focusPaging ? !adjacentFocusPage(catalog, study, page, -1) : !view.hasPrev;
   prev.addEventListener('click', () => onStep('prev'));
 
   const status = el('p', 'pager-status');
   const visible = view.pages.filter((pageNumber, index) => !(compact && index > 0));
-  const label = focusing
-    ? `${Math.min(study.index + 1, study.wordIds.length)} / ${study.wordIds.length}`
+  status.textContent = focusPaging
+    ? String(page)
     : (visible.length > 1 ? `${visible[0]}–${visible[1]}` : String(visible[0]));
-  status.textContent = label;
   status.setAttribute('aria-hidden', 'true');
 
   const next = el('button', 'btn btn-ghost', '次のページ');
   next.type = 'button';
   next.dataset.pager = 'next';
-  next.disabled = focusing || !view.hasNext;
+  next.disabled = focusPaging ? !adjacentFocusPage(catalog, study, page, 1) : !view.hasNext;
   next.addEventListener('click', () => onStep('next'));
   pager.append(prev, status, next);
-  if (focusing) pager.hidden = true;
+  if (focusing && study.finished) pager.hidden = true;
 
   const visibleWords = view.pages
     .filter((pageNumber, index) => !(compact && index > 0))
@@ -315,6 +348,38 @@ export function renderNotebook(container, options) {
   container.replaceChildren(screen);
   scheduleNotebookFit(screen);
   return view;
+}
+
+function lockIcon(locked) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '20');
+  svg.setAttribute('height', '20');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-width', '1.6');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('d', locked
+    ? 'M8 11V8a4 4 0 0 1 8 0v3M7 11h10v8H7z'
+    : 'M8 11V8a4 4 0 0 1 7.2-2.4M7 11h10v8H7z');
+  svg.append(path);
+  return svg;
+}
+
+function renderLock(notebook, onToggleLock) {
+  const locked = notebook?.locked !== false;
+  const button = el('button', 'lock-toggle');
+  button.type = 'button';
+  button.append(lockIcon(locked), el('span', 'visually-hidden', locked ? 'ロック中' : '編集可能'));
+  button.title = locked ? 'ロック中' : '編集可能';
+  button.setAttribute('aria-pressed', locked ? 'true' : 'false');
+  button.setAttribute('aria-label', locked ? 'ロック中。編集できない' : '編集可能。ロックする');
+  if (locked) button.classList.add('is-locked');
+  button.addEventListener('click', () => onToggleLock?.());
+  return button;
 }
 
 function renderPen(pen, onTogglePen, onSelectPen) {
@@ -496,7 +561,7 @@ function buildPaperField(word, slot, field, options) {
     ? (katakana ? 'カタカナ' : '漢字・単語')
     : 'ひらがな';
   input.setAttribute('aria-label', `${slot + 1}行目の${label}`);
-  if (pen?.active) input.readOnly = true;
+  if (pen?.active || options.notebook?.locked !== false) input.readOnly = true;
   if (field === 'hiragana') bindKanaInput(input, 'hiragana');
   else if (katakana) bindKanaInput(input, 'katakana');
   fitPaperInput(input);
@@ -504,7 +569,7 @@ function buildPaperField(word, slot, field, options) {
   cell.append(wrap);
   if (field === 'hiragana') cell.append(buildReadingHint());
   cell.addEventListener('mousedown', (event) => {
-    if (pen?.active) {
+    if (pen?.active || options.notebook?.locked !== false) {
       event.preventDefault();
       return;
     }
@@ -530,6 +595,10 @@ function buildGlossField(word, slot, field, options) {
   const label = field === 'origin' ? '原文' : '中国語';
   const input = glossInput(value, label, field, field === 'origin' ? (word?.originLanguage || '') : '');
   if (concealed) input.tabIndex = -1;
+  if (options.notebook?.locked !== false) {
+    input.readOnly = true;
+    input.addEventListener('mousedown', (event) => event.preventDefault());
+  }
   if (field === 'translation') {
     cell.classList.add('has-gloss-view', 'vocab-translation');
     cell.lang = 'zh-Hant';
@@ -941,6 +1010,8 @@ function buildLineTools(word, slot, options) {
   const tools = el('div', 'line-tools');
   const noteSlot = el('span', 'note-slot');
   if (word?.note) noteSlot.append(buildNoteDot(word.note));
+  tools.append(noteSlot);
+  if (options.notebook?.locked !== false) return tools;
   const more = el('button', 'row-more', '⋯');
   more.type = 'button';
   more.tabIndex = -1;
@@ -952,7 +1023,7 @@ function buildLineTools(word, slot, options) {
     event.stopPropagation();
     toggleRowMenu(more, slot, options);
   });
-  tools.append(noteSlot, more);
+  tools.append(more);
   return tools;
 }
 
@@ -1228,7 +1299,17 @@ function renderPracticeResult(words, answers, { onRetry, onReview, onExitStudy }
   return panel;
 }
 
-function renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, onFocusDraft }) {
+function renderFocusSession({
+  study,
+  notebook,
+  pen,
+  flashWordId,
+  focusDraft,
+  onFocusCorrect,
+  onFocusWrong,
+  onFocusDraft,
+  onHighlight,
+}) {
   const wordId = study.wordIds[study.index];
   const word = study.wordsById[wordId];
   const script = study.script === 'zh' || study.script === 'katakana' ? study.script : 'hiragana';
@@ -1237,8 +1318,29 @@ function renderFocusSession({ study, focusDraft, onFocusCorrect, onFocusWrong, o
   sheet.append(el('p', 'focus-count', `${study.index + 1} / ${study.wordIds.length}`));
   const kanji = el('div', 'focus-kanji hand');
   kanji.translate = false;
-  if (script === 'hiragana') kanji.textContent = word?.kanji || '';
-  else kanji.append(renderPracticePrompt(word, script));
+  const prompt = el('span', 'focus-prompt');
+  const kanjiMark = fieldHighlight(word, 'kanji');
+  const readingMark = fieldHighlight(word, 'reading');
+  const shownMark = kanjiMark || readingMark;
+  const markField = kanjiMark || !readingMark ? 'kanji' : 'reading';
+  if (shownMark) {
+    prompt.classList.add('mark', `mark-${shownMark}`);
+    prompt.dataset.ink = inkVariant(word?.id, markField);
+    if (flashWordId && flashWordId === word?.id) prompt.classList.add('is-fresh');
+  }
+  if (script === 'hiragana') prompt.textContent = word?.kanji || '';
+  else prompt.append(renderPracticePrompt(word, script));
+  prompt.addEventListener('click', () => {
+    if (!pen?.active || !pen.tool || !word?.id) return;
+    onHighlight?.(word.id, pen.tool === 'erase' ? null : pen.tool, markField);
+  });
+  kanji.append(prompt);
+  if (script === 'hiragana') {
+    const gloss = el('p', 'focus-gloss vocab-translation', word?.translation || '');
+    gloss.lang = 'zh-Hant';
+    if (notebook?.showTranslation === false) gloss.classList.add('is-concealed');
+    kanji.append(gloss);
+  }
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'reading-input focus-input';
