@@ -667,19 +667,6 @@ function focusPageOf(wordId, words = notebookWords()) {
   return pageForWord(words, wordId);
 }
 
-function firstFocusIndexOnPage(study, words, page) {
-  const ids = new Set(wordsForPage(words, page).map((word) => word.id));
-  return study.wordIds.findIndex((id) => ids.has(id));
-}
-
-function adjacentFocusPage(study, words, page, direction) {
-  const total = pageCount(words);
-  for (let next = page + direction; next >= 1 && next <= total; next += direction) {
-    if (firstFocusIndexOnPage(study, words, next) >= 0) return next;
-  }
-  return 0;
-}
-
 function focusStartIndex(words, practiceList) {
   const total = pageCount(words);
   const view = spreadFor(state.page, total, { compact: isCompact() });
@@ -712,17 +699,13 @@ function syncStudyPage() {
 function stepFocus(direction) {
   const study = state.study;
   if (!study || study.finished) return;
-  const words = notebookWords();
-  const current = focusPageOf(study.wordIds[study.index], words);
-  const page = adjacentFocusPage(study, words, current, direction === 'next' ? 1 : -1);
-  if (!page) return;
-  const index = firstFocusIndexOnPage(study, words, page);
-  if (index < 0) return;
+  const index = study.index + (direction === 'next' ? 1 : -1);
+  if (index < 0 || index >= study.wordIds.length) return;
   study.index = index;
   state.focusDraft = '';
   state.skipSnapshot = true;
-  state.turn = direction;
-  rememberNotebookPage(page);
+  state.turn = null;
+  syncStudyPage();
   render();
 }
 

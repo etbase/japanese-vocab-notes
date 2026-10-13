@@ -160,15 +160,6 @@ function renderNewCard(onCreate) {
   return card;
 }
 
-function adjacentFocusPage(words, study, page, direction) {
-  const total = pageCount(words);
-  const ids = new Set(study?.wordIds || []);
-  for (let next = page + direction; next >= 1 && next <= total; next += direction) {
-    if (wordsForPage(words, next).some((word) => ids.has(word.id))) return next;
-  }
-  return 0;
-}
-
 export function renderNotebook(container, options) {
   const {
     notebook,
@@ -315,25 +306,24 @@ export function renderNotebook(container, options) {
   }
 
   const pager = el('div', 'pager');
-  const prev = el('button', 'btn btn-ghost', '前のページ');
+  const focusQuestions = focusing && !study.finished;
+  const prev = el('button', 'btn btn-ghost', focusQuestions ? '上一題' : '前のページ');
   prev.type = 'button';
   prev.dataset.pager = 'prev';
-  const catalog = totalWords || words;
-  const focusPaging = focusing && !study.finished;
-  prev.disabled = focusPaging ? !adjacentFocusPage(catalog, study, page, -1) : !view.hasPrev;
+  prev.disabled = focusQuestions ? study.index <= 0 : !view.hasPrev;
   prev.addEventListener('click', () => onStep('prev'));
 
   const status = el('p', 'pager-status');
   const visible = view.pages.filter((pageNumber, index) => !(compact && index > 0));
-  status.textContent = focusPaging
-    ? String(page)
+  status.textContent = focusQuestions
+    ? `${study.index + 1} / ${study.wordIds.length}`
     : (visible.length > 1 ? `${visible[0]}–${visible[1]}` : String(visible[0]));
   status.setAttribute('aria-hidden', 'true');
 
-  const next = el('button', 'btn btn-ghost', '次のページ');
+  const next = el('button', 'btn btn-ghost', focusQuestions ? '下一題' : '次のページ');
   next.type = 'button';
   next.dataset.pager = 'next';
-  next.disabled = focusPaging ? !adjacentFocusPage(catalog, study, page, 1) : !view.hasNext;
+  next.disabled = focusQuestions ? study.index >= study.wordIds.length - 1 : !view.hasNext;
   next.addEventListener('click', () => onStep('next'));
   pager.append(prev, status, next);
   if (focusing && study.finished) pager.hidden = true;
