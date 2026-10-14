@@ -710,9 +710,15 @@ function stepFocus(direction) {
 }
 
 async function changeHighlight(wordId, color, field) {
-  if (state.study && state.study.kind !== 'focus') return;
   const target = field === 'hiragana' || field === 'reading' ? 'reading' : 'kanji';
-  const result = await setHighlight(wordId, color, target);
+  const word = notebookWords().find((item) => item.id === wordId);
+  if (!word) return;
+  const current = target === 'reading'
+    ? (word.highlightReading !== undefined ? word.highlightReading : (word.highlight || null))
+    : (word.highlightKanji !== undefined ? word.highlightKanji : (word.highlight || null));
+  const next = current ? null : (color === 'yellow' || color === 'pink' || color === 'green' ? color : null);
+  if (next === current) return;
+  const result = await setHighlight(wordId, next, target);
   if (!result.ok) return;
   state.flashWordId = wordId;
   render();
@@ -720,7 +726,7 @@ async function changeHighlight(wordId, color, field) {
 
 function togglePen() {
   state.pen.active = !state.pen.active;
-  if (state.pen.active && !state.pen.tool) state.pen.tool = 'yellow';
+  if (state.pen.active && state.pen.tool !== 'pink' && state.pen.tool !== 'green') state.pen.tool = 'yellow';
   render();
 }
 

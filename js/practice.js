@@ -3,6 +3,15 @@
 import { hasKatakana, isHiragana, isKatakana, normalizeText } from './vocabulary.js';
 
 const CHINESE_SPLIT = /[／/、;；|｜]+/u;
+const KANA_SEPARATOR = /[\s\u3000・]+/gu;
+
+function kanaBody(value) {
+  return normalizeText(value).replace(KANA_SEPARATOR, '');
+}
+
+function kanaAnswer(value) {
+  return normalizeText(value).replace(KANA_SEPARATOR, '・').replace(/^・+|・+$/g, '');
+}
 
 export function normalizeChinese(value) {
   return String(value ?? '')
@@ -26,7 +35,6 @@ export function acceptedChinese(expected) {
 export function judgeAnswer(raw, expected, { composing = false, script = 'hiragana' } = {}) {
   if (composing) return { status: 'pending' };
   const input = normalizeText(raw);
-  const answer = normalizeText(expected);
   if (!input) return { status: 'empty' };
   if (script === 'zh') {
     const given = normalizeChinese(input);
@@ -35,17 +43,17 @@ export function judgeAnswer(raw, expected, { composing = false, script = 'hiraga
     return { status: 'incorrect' };
   }
   if (script === 'katakana') {
-    if (!isKatakana(input)) return { status: 'invalid', message: 'カタカナで' };
-    if (input === answer) return { status: 'correct' };
+    if (!isKatakana(kanaBody(input))) return { status: 'invalid', message: 'カタカナで' };
+    if (kanaAnswer(input) === kanaAnswer(expected)) return { status: 'correct' };
     return { status: 'incorrect' };
   }
-  if (hasKatakana(input)) {
+  if (hasKatakana(kanaBody(input))) {
     return { status: 'katakana', message: 'ひらがなで' };
   }
-  if (!isHiragana(input)) {
+  if (!isHiragana(kanaBody(input))) {
     return { status: 'invalid', message: 'ひらがなで' };
   }
-  if (input === answer) return { status: 'correct' };
+  if (kanaAnswer(input) === kanaAnswer(expected)) return { status: 'correct' };
   return { status: 'incorrect' };
 }
 

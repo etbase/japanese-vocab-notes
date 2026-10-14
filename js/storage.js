@@ -677,8 +677,15 @@ export async function setHighlight(wordId, color, field = 'kanji') {
   if (highlight !== null && !HIGHLIGHTS.has(highlight)) {
     return { ok: false, message: 'マーカーの色が正しくありません' };
   }
-  if (field === 'reading') return updateWord(wordId, { highlightReading: highlight });
-  return updateWord(wordId, { highlight, highlightKanji: highlight });
+  const state = load();
+  const current = state.words.find((word) => word.id === wordId);
+  if (!current) return { ok: false, message: '単語が見つかりません' };
+  const reading = current.highlightReading !== undefined ? current.highlightReading : (current.highlight || null);
+  const kanji = current.highlightKanji !== undefined ? current.highlightKanji : (current.highlight || null);
+  if (field === 'reading') {
+    return updateWord(wordId, { highlightReading: highlight, highlightKanji: kanji });
+  }
+  return updateWord(wordId, { highlight, highlightKanji: highlight, highlightReading: reading });
 }
 
 export async function addPracticeLog(entry) {

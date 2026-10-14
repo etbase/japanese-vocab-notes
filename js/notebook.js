@@ -20,7 +20,6 @@ const PEN_TOOLS = [
   { id: 'yellow', label: '黄色' },
   { id: 'pink', label: 'ピンク' },
   { id: 'green', label: '緑' },
-  { id: 'erase', label: '消す' },
 ];
 
 function el(tag, className, text) {
@@ -388,7 +387,7 @@ function renderPen(pen, onTogglePen, onSelectPen) {
     palette.setAttribute('role', 'group');
     palette.setAttribute('aria-label', '蛍光ペンの色');
     PEN_TOOLS.forEach((tool) => {
-      const choice = el('button', 'pen-choice', tool.id === 'erase' ? '消す' : '');
+      const choice = el('button', 'pen-choice');
       choice.type = 'button';
       choice.dataset.tool = tool.id;
       choice.setAttribute('aria-label', tool.label);
@@ -451,7 +450,7 @@ function renderWord(word, options) {
   const kanji = el('span', 'word-kanji hand');
   kanji.translate = false;
   if (studying && (script === 'katakana' || script === 'zh')) {
-    kanji.append(renderPracticePrompt(word, script));
+    kanji.append(renderPracticePrompt(word, script, { pen, onHighlight, fresh }));
   } else {
     kanji.append(markNode(word.kanji, fieldHighlight(word, 'kanji'), fresh, inkVariant(word.id, 'kanji')));
     bindPenTarget(kanji, word, pen, onHighlight, 'kanji');
@@ -479,6 +478,7 @@ function renderAnswerTools(word, revealed, expected, script) {
   }
   const answer = el('button', 'text-button', '答え');
   answer.type = 'button';
+  answer.tabIndex = -1;
   answer.addEventListener('mousedown', (event) => event.preventDefault());
   answer.addEventListener('click', () => showAnswer(answer.closest('.word-line'), revealed, word.id, expected, script));
   tools.append(answer);
@@ -493,17 +493,26 @@ function revealedLabel(expected, script) {
   return label;
 }
 
-function renderPracticePrompt(word, script) {
+function renderPracticePrompt(word, script, { pen, onHighlight, fresh } = {}) {
+  const highlight = fieldHighlight(word, 'kanji');
   if (script === 'zh') {
-    const prompt = el('span', 'hand', word?.kanji || '');
+    const prompt = el('span', 'hand');
     prompt.translate = false;
+    prompt.append(markNode(word?.kanji || '', highlight, fresh, inkVariant(word?.id, 'kanji')));
+    bindPenTarget(prompt, word, pen, onHighlight, 'kanji');
     return prompt;
   }
   const block = el('span', 'practice-prompt');
+  if (highlight) {
+    block.classList.add('mark', `mark-${highlight}`);
+    block.dataset.ink = inkVariant(word?.id, 'kanji');
+    if (fresh) block.classList.add('is-fresh');
+  }
   const meaning = el('span', 'practice-meaning vocab-translation', word?.translation || '');
   meaning.lang = 'zh-Hant';
   block.append(meaning);
   if (word?.originWord) block.append(el('span', 'practice-origin', word.originWord));
+  bindPenTarget(block, word, pen, onHighlight, 'kanji');
   return block;
 }
 
@@ -569,7 +578,7 @@ function buildPaperField(word, slot, field, options) {
   });
   cell.addEventListener('click', () => {
     if (!pen?.active || !pen.tool || !word?.id) return;
-    options.onHighlight?.(word.id, pen.tool === 'erase' ? null : pen.tool, field);
+    options.onHighlight?.(word.id, pen.tool, field);
   });
   return cell;
 }
@@ -1168,7 +1177,7 @@ function bindPenTarget(node, word, pen, onHighlight, field) {
   node.addEventListener('click', () => {
     if (!pen?.active || !pen.tool) return;
     if (window.getSelection?.()?.toString()) return;
-    onHighlight(word.id, pen.tool === 'erase' ? null : pen.tool, field);
+    onHighlight(word.id, pen.tool, field);
   });
 }
 
@@ -1322,7 +1331,7 @@ function renderFocusSession({
   else prompt.append(renderPracticePrompt(word, script));
   prompt.addEventListener('click', () => {
     if (!pen?.active || !pen.tool || !word?.id) return;
-    onHighlight?.(word.id, pen.tool === 'erase' ? null : pen.tool, markField);
+    onHighlight?.(word.id, pen.tool, markField);
   });
   kanji.append(prompt);
   if (script === 'hiragana') {
