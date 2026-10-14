@@ -6,6 +6,8 @@
  */
 
 import { STARTER_WORD_ROWS } from './starter-words.js';
+import { PHOTO_VOCAB_BATCH_ID, PHOTO_VOCAB_ROWS } from './vocab-batch-20261014.js';
+import { PHOTO_1113_BATCH_ID, PHOTO_1113_ROWS } from './vocab-batch-20261014-11-13.js';
 import { isHiragana, normalizeText } from './vocabulary.js';
 
 const HIGHLIGHTS = new Set(['yellow', 'pink', 'green']);
@@ -117,7 +119,7 @@ function cleanWord(input, { strict = false } = {}) {
   const id = String(input.id ?? '').trim();
   const notebookId = String(input.notebookId ?? '').trim();
   const kanji = String(input.kanji ?? '').trim().slice(0, 40);
-  const hiragana = normalizeText(input.hiragana).slice(0, 80);
+  const hiragana = normalizeReading(input.hiragana).slice(0, 80);
   if (!id || !notebookId) return null;
   if (strict && hiragana && !isHiragana(hiragana)) return null;
   const legacyHighlight = HIGHLIGHTS.has(input.highlight) ? input.highlight : null;
@@ -154,6 +156,16 @@ function cleanWord(input, { strict = false } = {}) {
     createdAt,
     updatedAt: String(input.updatedAt || createdAt),
   };
+}
+
+function normalizeReading(value) {
+  const kept = [];
+  const shielded = String(value ?? '').replace(/[（）]/gu, (char) => {
+    kept.push(char);
+    return '\u0000';
+  });
+  let index = 0;
+  return shielded.normalize('NFKC').replace(/\u0000/g, () => kept[index++] ?? '').trim();
 }
 
 const STARTER_ID = 'nb-starter';
@@ -267,6 +279,56 @@ function migrateStarterNotebook(state) {
   return true;
 }
 
+function cleanBatches(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => String(item ?? '').trim()).filter(Boolean))];
+}
+
+const VOCAB_IMPORTS = [
+  { id: PHOTO_VOCAB_BATCH_ID, rows: PHOTO_VOCAB_ROWS, prefix: 'p20261014' },
+  { id: PHOTO_1113_BATCH_ID, rows: PHOTO_1113_ROWS, prefix: 'p1113-20261014' },
+];
+
+function appendVocabBatch(state, batch) {
+  const batches = cleanBatches(state.importedBatches);
+  state.importedBatches = batches;
+  if (batches.includes(batch.id)) return false;
+  const notebook = state.notebooks.find((item) => item.id === STARTER_ID);
+  if (!notebook) return false;
+  const createdAt = nowIso();
+  const owned = state.words.filter((word) => word.notebookId === STARTER_ID);
+  let order = owned.reduce((max, word) => Math.max(max, Number(word.order) || 0), -1);
+  const usedIds = new Set(state.words.map((word) => word.id));
+  batch.rows.forEach((row, index) => {
+    let id = `${STARTER_ID}-${batch.prefix}-${String(index + 1).padStart(3, '0')}`;
+    while (usedIds.has(id)) id = `${id}-x`;
+    const clean = cleanWord({
+      id,
+      notebookId: STARTER_ID,
+      kanji: row[0],
+      hiragana: row[1],
+      note: '',
+      translation: row[2],
+      translationEdited: true,
+      readingEdited: true,
+      highlight: null,
+      order: order + 1,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    if (!clean) return;
+    order = clean.order;
+    state.words.push(clean);
+    usedIds.add(clean.id);
+  });
+  state.importedBatches = [...batches, batch.id];
+  return true;
+}
+
+function importPhotoVocabBatch(state) {
+  return VOCAB_IMPORTS.reduce((changed, batch) => appendVocabBatch(state, batch) || changed, false);
+}
+
 const OLD_SAMPLE_IDS = ['nb-daily', 'nb-n2', 'nb-n3', 'nb-weak', 'nb-work'];
 const OLD_SAMPLE_WORD_COUNT = 86;
 
@@ -315,7 +377,14 @@ function normalizeState(data) {
   const starterWordsVersion = Number.isFinite(Number(data?.starterWordsVersion))
     ? Math.max(0, Math.floor(Number(data.starterWordsVersion)))
     : 0;
-  return { version: 1, starterWordsVersion, notebooks, words, practiceLogs };
+  return {
+    version: 1,
+    starterWordsVersion,
+    importedBatches: cleanBatches(data?.importedBatches),
+    notebooks,
+    words,
+    practiceLogs,
+  };
 }
 
 function persist() {
@@ -337,12 +406,14 @@ function load() {
   if (!canUseStorage()) {
     persistenceWarning = true;
     memory = createSeedState();
+    importPhotoVocabBatch(memory);
     return memory;
   }
   persistenceWarning = false;
   const raw = localStorage.getItem(storageKey());
   if (!raw) {
     memory = createSeedState();
+    importPhotoVocabBatch(memory);
     persist();
     return memory;
   }
@@ -351,12 +422,14 @@ function load() {
     memory = normalizeState(JSON.parse(raw));
     if (isUntouchedSample(memory)) {
       memory = createSeedState();
+      importPhotoVocabBatch(memory);
       persist();
-    } else if (migrateStarterNotebook(memory) || glossMigrated) {
+    } else if (migrateStarterNotebook(memory) || importPhotoVocabBatch(memory) || glossMigrated) {
       persist();
     }
   } catch {
     memory = createSeedState();
+    importPhotoVocabBatch(memory);
     persist();
   }
   return memory;
