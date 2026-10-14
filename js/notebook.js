@@ -307,7 +307,7 @@ export function renderNotebook(container, options) {
 
   const pager = el('div', 'pager');
   const focusQuestions = focusing && !study.finished;
-  const prev = el('button', 'btn btn-ghost', focusQuestions ? '上一題' : '前のページ');
+  const prev = el('button', 'btn btn-ghost', focusQuestions ? '前の問題' : '前のページ');
   prev.type = 'button';
   prev.dataset.pager = 'prev';
   prev.disabled = focusQuestions ? study.index <= 0 : !view.hasPrev;
@@ -320,7 +320,7 @@ export function renderNotebook(container, options) {
     : (visible.length > 1 ? `${visible[0]}–${visible[1]}` : String(visible[0]));
   status.setAttribute('aria-hidden', 'true');
 
-  const next = el('button', 'btn btn-ghost', focusQuestions ? '下一題' : '次のページ');
+  const next = el('button', 'btn btn-ghost', focusQuestions ? '次の問題' : '次のページ');
   next.type = 'button';
   next.dataset.pager = 'next';
   next.disabled = focusQuestions ? study.index >= study.wordIds.length - 1 : !view.hasNext;

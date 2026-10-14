@@ -101,9 +101,10 @@ svg {
 
 .site-note {
   margin: 8px auto 20px;
-  color: var(--ink-soft);
+  color: #c4bbb0;
   font-size: 12px;
   line-height: 1.6;
+  text-align: center;
 }
 
 .site-note a {
