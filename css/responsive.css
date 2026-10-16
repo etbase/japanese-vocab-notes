@@ -69,6 +69,10 @@ html.is-compact .notebook-tools .btn {
   padding: 0 12px;
 }
 
+html.is-compact .import-word-list li {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 html.is-compact .focus-sheet {
   min-height: 360px;
 }

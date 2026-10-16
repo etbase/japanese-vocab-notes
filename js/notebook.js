@@ -70,7 +70,7 @@ function markNode(text, highlight, fresh, ink) {
 }
 
 export function renderShelf(container, {
-  notebooks, wordsByNotebook, onCreate, onEdit, onDelete, onExport, onImport, freshId,
+  notebooks, wordsByNotebook, onCreate, onEdit, onDelete, freshId,
 }) {
   const section = el('section', 'shelf');
   section.setAttribute('aria-labelledby', 'shelf-title');
@@ -84,16 +84,6 @@ export function renderShelf(container, {
   header.append(headingWrap);
   if (notebooks.length) header.append(el('p', 'shelf-count', `${notebooks.length}冊`));
   section.append(header);
-
-  const transfer = el('div', 'shelf-transfer');
-  const exportButton = el('button', 'btn btn-ghost', '書き出す');
-  exportButton.type = 'button';
-  exportButton.addEventListener('click', () => onExport?.());
-  const importButton = el('button', 'btn btn-ghost', '読み込む');
-  importButton.type = 'button';
-  importButton.addEventListener('click', () => onImport?.());
-  transfer.append(exportButton, importButton);
-  section.append(transfer);
 
   if (!notebooks.length) {
     const empty = el('div', 'empty-shelf');
@@ -205,6 +195,8 @@ export function renderNotebook(container, options) {
     onFocusCorrect,
     onFocusWrong,
     onToggleLock,
+    onExport,
+    onAppend,
   } = options;
   const studying = study?.kind === 'practice';
   const focusing = study?.kind === 'focus';
@@ -266,7 +258,13 @@ export function renderNotebook(container, options) {
     const status = el('p', 'tool-status');
     status.id = 'tool-status';
     status.hidden = true;
-    tools.append(translationButton(), translate, practice, focus, status);
+    const exportNotebook = el('button', 'btn btn-ghost', '書き出す');
+    exportNotebook.type = 'button';
+    exportNotebook.addEventListener('click', () => onExport?.());
+    const appendWords = el('button', 'btn btn-ghost', '単語を追加');
+    appendWords.type = 'button';
+    appendWords.addEventListener('click', () => onAppend?.());
+    tools.append(translationButton(), translate, practice, focus, exportNotebook, appendWords, status);
   }
 
   const book = el('div', 'book');

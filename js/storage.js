@@ -595,7 +595,6 @@ export function commitImportedState(next) {
 }
 
 export async function ready() {
-  backupArchive();
   if (memory && memoryUser === userId) return;
   memoryUser = userId;
   if (!userId) {

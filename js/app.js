@@ -21,12 +21,10 @@ import {
   getNotebook,
   getNotebooks,
   getWordsByNotebook,
-  backupArchive,
   commitImportedState,
   hasCloudWarning,
   hasPersistenceWarning,
   pauseCloudPush,
-  readArchiveRaw,
   readSession,
   resumeCloudPush,
   insertWordAt,
@@ -37,7 +35,7 @@ import {
   updateWord,
 } from './storage.js';
 import { judgeAnswer } from './practice.js';
-import { buildExportFile, planCsvImport, planJsonImport } from './transfer.js';
+import { buildExportFile, inspectImportFile, planCsvImport, planJsonAppend } from './transfer.js';
 import {
   PAGE_SIZE,
   editablePageLimit,
@@ -615,6 +613,8 @@ function render() {
         onFocusDraft: (value) => {
           state.focusDraft = value;
         },
+        onExport: exportOpenNotebook,
+        onAppend: openAppendForCurrent,
       });
       if (!state.focusSelector && !state.focusSlot && enteredNotebook) state.focusSelector = '#notebook-title';
     }
@@ -644,49 +644,23 @@ function downloadJson(filename, value) {
   URL.revokeObjectURL(url);
 }
 
-function openExportDialog() {
-  const raw = readArchiveRaw();
-  const archive = raw ? buildExportFile(raw, 'jvn.local-demo.v1') : null;
-  const session = readSession();
-  const account = session?.notebooks?.length ? buildExportFile(JSON.stringify(session), 'account') : null;
-  if (!archive && !account) {
-    openModal({
-      title: '書き出す',
-      body: '書き出せるノートがありません。',
-      actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
-    });
+function exportOpenNotebook() {
+  if (!getCurrentUser().uid) {
+    requireSignIn();
     return;
   }
-  const body = el('div', 'import-preview');
-  body.append(el('p', 'modal-text', '書き出しても、元のデータは削除も変更もしません。'));
-  if (archive?.state?.notebooks?.length) {
-    const title = archive.state.notebooks[0]?.title || 'ノート';
-    const count = Array.isArray(archive.state.words) ? archive.state.words.length : 0;
-    body.append(el('p', 'modal-text', `ブラウザ内の「${title}」は${count}語です。`));
-  }
-  const actions = [];
-  if (archive) {
-    actions.push({
-      label: 'ブラウザの単語帳',
-      className: 'btn btn-primary',
-      onClick: () => {
-        downloadJson('jvn-backup.json', archive);
-        closeModal();
-      },
-    });
-  }
-  if (account) {
-    actions.push({
-      label: 'ログイン中のノート',
-      className: 'btn btn-ghost',
-      onClick: () => {
-        downloadJson('jvn-account-backup.json', account);
-        closeModal();
-      },
-    });
-  }
-  actions.push({ label: 'キャンセル', className: 'btn btn-ghost', onClick: () => closeModal() });
-  openModal({ title: '書き出す', body, actions });
+  const notebook = getNotebook(state.notebookId);
+  if (!notebook) return;
+  const words = getWordsByNotebook(notebook.id);
+  const logs = (readSession()?.practiceLogs || []).filter((log) => log.notebookId === notebook.id);
+  const file = buildExportFile(JSON.stringify({
+    version: 1,
+    notebooks: [notebook],
+    words,
+    practiceLogs: logs,
+  }), 'notebook');
+  const filename = `jvn-${notebook.title.replace(/[\\/:*?"<>|]/g, '')}.json`;
+  downloadJson(filename, file);
 }
 
 function requireSignIn() {
@@ -700,6 +674,32 @@ function requireSignIn() {
 }
 
 function fillPreview(container, plan) {
+  if (plan.mode === 'append' && plan.append) {
+    const info = plan.append;
+    const last = info.lastKanji ? `${info.lastKanji}（${info.lastHiragana}）` : 'なし';
+    container.append(el('p', 'modal-text', '読み込み方：既存ノートに追加'));
+    container.append(el('p', 'modal-text', `ノート：${info.title}`));
+    container.append(el('p', 'modal-text', `いまの単語：${info.currentCount}`));
+    container.append(el('p', 'modal-text', `追加：${info.fileCount}`));
+    container.append(el('p', 'modal-text', `あわせて：${info.nextCount}`));
+    container.append(el('p', 'modal-text', `いまの最後：${last}`));
+    const list = el('ol', 'import-word-list');
+    info.rows.forEach((row) => {
+      const item = document.createElement('li');
+      item.append(
+        el('span', '', row.kanji),
+        el('span', '', row.hiragana),
+        el('span', 'vocab-translation', row.translation),
+      );
+      list.append(item);
+    });
+    container.append(list);
+    container.append(el('p', 'modal-text', 'いまの単語、マーカー、設定はそのままです。確認するまで保存しません。'));
+    if (info.addedCount !== info.fileCount) {
+      container.append(el('p', 'modal-text', `新しく保存するのは${info.addedCount}語です。`));
+    }
+    return;
+  }
   const target = plan.preview[0];
   container.append(el('p', 'modal-text', plan.kind === 'csv'
     ? `「${target?.title || 'ノート'}」に${plan.totalWords}語を追加します。`
@@ -774,6 +774,26 @@ async function applyImport(plan, button) {
   importBusy = false;
   closeModal();
   render();
+  if (plan.mode === 'append' && plan.words.length) {
+    const first = plan.words[0];
+    const title = plan.append?.title || 'ノート';
+    openModal({
+      title: '読み込みました',
+      body: `「${title}」に${plan.words.length}語を追加しました。`,
+      actions: [
+        {
+          label: '最初の新しい単語を開く',
+          className: 'btn btn-primary',
+          onClick: () => {
+            const page = pageForWord(getWordsByNotebook(first.notebookId), first.id);
+            closeModal({ restore: false });
+            location.hash = notebookHash(first.notebookId, page);
+          },
+        },
+        { label: '閉じる', className: 'btn btn-ghost', onClick: () => closeModal() },
+      ],
+    });
+  }
 }
 
 function showPlan(plan) {
@@ -799,19 +819,9 @@ function showPlan(plan) {
   openModal({ title: '読み込みの確認', body, actions: [] });
 }
 
-function openCsvPreview(text) {
-  const notebooks = readSession()?.notebooks || [];
-  if (!notebooks.length) {
-    openModal({
-      title: '読み込む',
-      body: '追加先のノートがありません。先にノートを作成してください。',
-      actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
-    });
-    return;
-  }
+function openAppendPreview(text, kind, notebooks) {
   const body = el('div', 'import-preview');
   const summary = el('div');
-  body.append(summary);
   let selected = notebooks[0].id;
   let plan = null;
   let ticket = 0;
@@ -822,7 +832,10 @@ function openCsvPreview(text) {
     const current = ticket + 1;
     ticket = current;
     confirm.disabled = true;
-    const next = await planCsvImport(text, readSession(), selected);
+    const session = readSession();
+    const next = kind === 'csv'
+      ? await planCsvImport(text, session, selected)
+      : await planJsonAppend(text, session, selected);
     if (current !== ticket) return;
     plan = next;
     summary.replaceChildren();
@@ -831,7 +844,7 @@ function openCsvPreview(text) {
       return;
     }
     fillPreview(summary, plan);
-    confirm.disabled = false;
+    confirm.disabled = plan.words.length === 0;
   };
   if (notebooks.length > 1) {
     const label = el('label', 'field');
@@ -849,9 +862,8 @@ function openCsvPreview(text) {
     });
     label.append(select);
     body.append(label);
-  } else {
-    body.append(el('p', 'modal-text', `追加先は「${notebooks[0].title}」です。`));
   }
+  body.append(summary);
   const actions = el('div', 'modal-actions');
   const cancel = el('button', 'btn btn-ghost', 'キャンセル');
   cancel.type = 'button';
@@ -863,8 +875,16 @@ function openCsvPreview(text) {
   refresh();
 }
 
-function openImportDialog() {
+function importKind(file, text) {
+  const name = file.name.toLowerCase();
+  const trimmed = text.trimStart();
+  return name.endsWith('.csv') || (!trimmed.startsWith('{') && !trimmed.startsWith('[')) ? 'csv' : 'json';
+}
+
+function openAppendForCurrent() {
   if (!requireSignIn()) return;
+  const notebook = getNotebook(state.notebookId);
+  if (!notebook) return;
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.json,.csv,application/json,text/csv';
@@ -872,15 +892,128 @@ function openImportDialog() {
     const file = input.files?.[0];
     if (!file) return;
     const text = await file.text();
-    const name = file.name.toLowerCase();
-    const trimmed = text.trimStart();
-    if (name.endsWith('.csv') || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
-      openCsvPreview(text);
-      return;
-    }
-    showPlan(await planJsonImport(text, readSession()));
+    openAppendPreview(text, importKind(file, text), [notebook]);
   });
   input.click();
+}
+
+function notebookImportField() {
+  let current = { status: 'empty' };
+  const field = el('div', 'field import-file-field');
+  field.append(el('span', 'field-label', '単語を読み込む（任意）'));
+  const row = el('div', 'import-file-row');
+  const pick = el('button', 'btn btn-ghost', 'ファイルを選択');
+  pick.type = 'button';
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,.csv,application/json,text/csv';
+  input.hidden = true;
+  const clear = el('button', 'text-button', '選ばない');
+  clear.type = 'button';
+  const name = el('p', 'import-file-name', 'ファイルはまだ選んでいません');
+  const preview = el('div', 'import-file-preview');
+  const reset = () => {
+    input.value = '';
+    current = { status: 'empty' };
+    name.textContent = 'ファイルはまだ選んでいません';
+    preview.replaceChildren();
+  };
+  pick.addEventListener('click', () => input.click());
+  clear.addEventListener('click', reset);
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    preview.replaceChildren();
+    if (!file) {
+      reset();
+      return;
+    }
+    const text = await file.text();
+    const kind = importKind(file, text);
+    const inspected = await inspectImportFile(text, kind);
+    if (!inspected.ok) {
+      current = { status: 'error', message: inspected.message };
+      name.textContent = file.name;
+      preview.append(el('p', 'form-error', inspected.message));
+      return;
+    }
+    current = { status: 'ready', text, kind, count: inspected.count };
+    name.textContent = `${file.name}（${inspected.count}語）`;
+    const list = el('ol', 'import-word-list');
+    inspected.rows.forEach((row) => {
+      const item = document.createElement('li');
+      item.append(el('span', '', row.kanji), el('span', '', row.hiragana), el('span', 'vocab-translation', row.translation));
+      list.append(item);
+    });
+    preview.append(list);
+    paintConfirm();
+  });
+  const confirm = el('p', 'modal-text');
+  confirm.hidden = true;
+  const paintConfirm = () => {
+    if (current.status !== 'ready') {
+      confirm.hidden = true;
+      confirm.textContent = '';
+      return;
+    }
+    const form = field.closest('form');
+    const title = form?.querySelector('input[name="title"]')?.value.trim() || '（名前が未入力）';
+    const type = form?.querySelector('input[name="notebook-type"]:checked')?.value === 'katakana' ? 'カタカナノート' : '漢字ノート';
+    const color = form?.querySelector('input[name="cover-color"]:checked')?.closest('label')?.querySelector('.visually-hidden')?.textContent || '';
+    confirm.hidden = false;
+    confirm.textContent = `「${title}」（${type}${color ? `・${color}` : ''}）を作り、${current.count}語を読み込みます。ファイル内の名前・種類・色は使いません。つくるまで保存しません。`;
+  };
+  field.addEventListener('input', paintConfirm);
+  field.addEventListener('change', paintConfirm);
+  row.append(pick, clear, input);
+  field.append(row, name, confirm, preview);
+  return { field, state: () => current, refresh: paintConfirm };
+}
+
+async function createNotebookWithWords(payload, imported) {
+  const user = getCurrentUser();
+  if (!user.uid) return { ok: false, message: 'ログインしてください' };
+  pauseCloudPush();
+  const created = await createNotebook(payload);
+  if (!created.ok) {
+    resumeCloudPush();
+    return created;
+  }
+  const plan = imported.kind === 'csv'
+    ? await planCsvImport(imported.text, readSession(), created.notebook.id)
+    : await planJsonAppend(imported.text, readSession(), created.notebook.id);
+  if (!plan.ok || !plan.words.length) {
+    await deleteNotebook(created.notebook.id);
+    resumeCloudPush();
+    return { ok: false, message: plan.message || '単語を読み込めませんでした。ノートは作られていません。' };
+  }
+  const written = await writeOwnedDocuments(user.uid, {
+    notebooks: [created.notebook],
+    words: plan.words,
+    practiceLogs: [],
+    meta: { ...plan.meta, updatedAt: new Date().toISOString() },
+  });
+  if (!written.ok) {
+    await deleteOwnedDocuments(user.uid, written.created);
+    await deleteNotebook(created.notebook.id);
+    resumeCloudPush();
+    return { ok: false, message: '保存できませんでした。ノートは作られていません。' };
+  }
+  if (getCurrentUser().uid !== user.uid) {
+    resumeCloudPush();
+    return { ok: false, message: 'ログインが変わったため、中止しました。' };
+  }
+  const session = readSession();
+  commitImportedState({
+    ...session,
+    starterWordsVersion: plan.meta.starterWordsVersion,
+    importedBatches: plan.meta.importedBatches,
+    completedImports: plan.meta.completedImports,
+    notebooks: session.notebooks,
+    words: [...session.words, ...plan.words],
+    practiceLogs: session.practiceLogs,
+  });
+  resumeCloudPush();
+  return created;
 }
 
 function renderShelfView(root, freshId) {
@@ -895,8 +1028,6 @@ function renderShelfView(root, freshId) {
     onCreate: () => openNotebookDialog('create'),
     onEdit: (notebook) => openNotebookDialog('edit', notebook),
     onDelete: confirmDelete,
-    onExport: openExportDialog,
-    onImport: openImportDialog,
   });
 }
 
@@ -1433,7 +1564,14 @@ function openNotebookDialog(mode, notebook) {
   const submit = el('button', 'btn btn-primary', mode === 'edit' ? '保存する' : 'つくる');
   submit.type = 'submit';
   actions.append(cancel, submit);
-  form.append(field, error, typeField, colorField, actions);
+  const importField = mode === 'create' ? notebookImportField() : null;
+  form.append(field, error, typeField, colorField);
+  if (importField) {
+    form.append(importField.field);
+    form.addEventListener('input', () => importField.refresh());
+    form.addEventListener('change', () => importField.refresh());
+  }
+  form.append(actions);
 
   let composing = false;
   input.addEventListener('compositionstart', () => {
@@ -1462,19 +1600,53 @@ function openNotebookDialog(mode, notebook) {
     const color = form.querySelector('input[name="cover-color"]:checked')?.value || 'sage';
     const type = form.querySelector('input[name="notebook-type"]:checked')?.value === 'katakana' ? 'katakana' : 'kanji';
     submit.disabled = true;
-    const payload = { title: title.trim(), color, type };
-    const result = mode === 'edit'
-      ? await updateNotebook(notebook.id, payload)
-      : await createNotebook({ ...payload, showTranslation: true });
+    const payload = { title: title.trim(), color, type, showTranslation: true };
+    if (mode === 'edit') {
+      const result = await updateNotebook(notebook.id, payload);
+      submit.disabled = false;
+      if (!result.ok) {
+        showError(result.message || '保存できませんでした');
+        return;
+      }
+      closeModal({ restore: false });
+      state.focusSelector = `[data-notebook-id="${CSS.escape(notebook.id)}"] .cover-open`;
+      render();
+      return;
+    }
+    const imported = importField?.state() || { status: 'empty' };
+    if (imported.status === 'error') {
+      submit.disabled = false;
+      showError(imported.message || 'ファイルを確認してください');
+      return;
+    }
+    if (imported.status === 'ready') {
+      const checked = await inspectImportFile(imported.text, imported.kind);
+      if (!checked.ok) {
+        submit.disabled = false;
+        showError(checked.message || 'ファイルを確認してください');
+        return;
+      }
+      const created = await createNotebookWithWords(payload, imported);
+      submit.disabled = false;
+      if (!created.ok) {
+        showError(created.message || '保存できませんでした');
+        return;
+      }
+      closeModal({ restore: false });
+      state.freshId = created.notebook.id;
+      state.focusSelector = `[data-notebook-id="${CSS.escape(created.notebook.id)}"] .cover-open`;
+      render();
+      return;
+    }
+    const result = await createNotebook(payload);
     submit.disabled = false;
     if (!result.ok) {
       showError(result.message || '保存できませんでした');
       return;
     }
-    const id = mode === 'edit' ? notebook.id : result.notebook.id;
     closeModal({ restore: false });
-    state.freshId = mode === 'create' ? id : null;
-    state.focusSelector = `[data-notebook-id="${CSS.escape(id)}"] .cover-open`;
+    state.freshId = result.notebook.id;
+    state.focusSelector = `[data-notebook-id="${CSS.escape(result.notebook.id)}"] .cover-open`;
     render();
   });
 
@@ -1688,7 +1860,6 @@ function showFatal() {
 
 async function start() {
   applyCompact();
-  backupArchive();
   await readyAuth();
   bindChrome();
   await sessionQueue;

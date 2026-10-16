@@ -335,19 +335,7 @@ main {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin: 8px 0 14px;
-}
-
-.shelf-transfer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0 0 18px;
-}
-
-.shelf-transfer .btn {
-  min-height: 36px;
-  padding: 0 14px;
+  margin: 8px 0 22px;
 }
 
 .import-preview {
@@ -369,6 +357,46 @@ main {
   border-radius: 8px;
   background: transparent;
   color: var(--ink);
+}
+
+.import-word-list {
+  max-height: 220px;
+  margin: 0;
+  padding: 8px 12px;
+  overflow: auto;
+  border: 1px solid rgba(73, 68, 62, 0.18);
+  border-radius: 8px;
+  list-style: none;
+}
+
+.import-word-list li {
+  display: grid;
+  grid-template-columns: minmax(4.5em, 7em) minmax(5em, 8em) minmax(0, 1fr);
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.import-word-list li span {
+  overflow-wrap: anywhere;
+}
+
+.import-file-field {
+  margin-top: 16px;
+}
+
+.import-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.import-file-name {
+  margin: 8px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .shelf-heading h2,
@@ -424,11 +452,17 @@ main {
 }
 
 .modal-actions {
+  position: sticky;
+  bottom: -18px;
+  z-index: 1;
   display: flex;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 18px;
+  margin-bottom: -18px;
+  padding: 12px 0 18px;
+  background: var(--paper);
 }
 
 .field {

@@ -263,57 +263,150 @@ function parseCsv(text) {
   return rows.filter((item) => item.some(Boolean));
 }
 
-function csvRows(text) {
+const CSV_COLUMNS = new Map([
+  ['漢字', 'kanji'],
+  ['kanji', 'kanji'],
+  ['ひらがな', 'hiragana'],
+  ['平假名', 'hiragana'],
+  ['假名', 'hiragana'],
+  ['hiragana', 'hiragana'],
+  ['繁體中文', 'translation'],
+  ['繁体中文', 'translation'],
+  ['中文', 'translation'],
+  ['translation', 'translation'],
+]);
+
+function csvTable(text) {
   const rows = parseCsv(text);
-  if (!rows.length) return [];
-  const header = rows[0].map((cell) => cell.toLowerCase());
-  const headed = /漢字|単語|kanji|ことば/.test(header[0] || '');
-  return (headed ? rows.slice(1) : rows).filter((row) => row.some(Boolean));
+  if (!rows.length) return { ok: false, message: '追加する単語がありません。' };
+  const header = rows[0].map((cell) => cell.trim());
+  const columns = {};
+  header.forEach((cell, index) => {
+    const key = CSV_COLUMNS.get(cell) || CSV_COLUMNS.get(cell.toLowerCase());
+    if (key && columns[key] === undefined) columns[key] = index;
+  });
+  if (columns.kanji === undefined || columns.hiragana === undefined || columns.translation === undefined) {
+    return { ok: false, message: '1行目は「漢字,ひらがな,繁體中文」にしてください。' };
+  }
+  const records = [];
+  for (const row of rows.slice(1)) {
+    if (!row.some(Boolean)) continue;
+    const kanji = row[columns.kanji] || '';
+    const hiragana = row[columns.hiragana] || '';
+    const translation = row[columns.translation] || '';
+    if (!kanji && !hiragana) return { ok: false, message: '漢字もひらがなもない行があるため、中止しました。' };
+    records.push({ kanji, hiragana, translation, note: '', highlight: null, highlightKanji: null, highlightReading: null });
+  }
+  if (!records.length) return { ok: false, message: '追加する単語がありません。' };
+  return { ok: true, records };
 }
 
-export async function planCsvImport(text, session = emptySession(), notebookId) {
+function jsonRecords(text) {
+  let data;
+  try {
+    data = parseBackup(text);
+  } catch {
+    return { ok: false, message: 'JSONとして読み取れません。' };
+  }
+  if (!data) return { ok: false, message: 'ノートが入っていないファイルです。' };
+  const notebooks = Array.isArray(data.notebooks) ? data.notebooks : [];
+  const words = Array.isArray(data.words) ? data.words : [];
+  const ordered = [];
+  const seen = new Set();
+  const take = (list) => {
+    list
+      .slice()
+      .sort((a, b) => (Number(a?.order) || 0) - (Number(b?.order) || 0) || String(a?.createdAt || '').localeCompare(String(b?.createdAt || '')))
+      .forEach((word) => {
+        if (!word || seen.has(word)) return;
+        seen.add(word);
+        ordered.push(word);
+      });
+  };
+  notebooks.forEach((notebook) => {
+    take(words.filter((word) => word?.notebookId === notebook.id));
+  });
+  take(words);
+  if (!ordered.length) return { ok: false, message: '追加する単語がありません。' };
+  return { ok: true, records: ordered };
+}
+
+function nextOrder(words, notebookId) {
+  return words
+    .filter((word) => word.notebookId === notebookId)
+    .reduce((max, word) => Math.max(max, Number.isInteger(word.order) ? word.order : -1), -1) + 1;
+}
+
+function sameSequence(owned, records) {
+  const key = (word) => `${word.kanji}\n${word.hiragana}\n${word.translation}`;
+  const haystack = [...owned]
+    .sort((a, b) => a.order - b.order || String(a.createdAt).localeCompare(String(b.createdAt)))
+    .map(key)
+    .join('\n---\n');
+  const needle = records.map(key).join('\n---\n');
+  return Boolean(needle) && haystack.includes(needle);
+}
+
+async function planAppend(records, session, notebookId, contentKind) {
   const notebook = (session.notebooks || []).find((item) => item.id === notebookId);
   if (!notebook) return { ok: false, message: '追加先のノートがありません。' };
-  const rows = csvRows(text);
-  if (!rows.length) return { ok: false, message: '追加する単語がありません。' };
   const owned = (session.words || []).filter((word) => word.notebookId === notebook.id);
-  let order = owned.reduce((max, word) => Math.max(max, Number.isInteger(word.order) ? word.order : 0), -1) + 1;
+  const ownedById = new Map(owned.map((word) => [word.id, word]));
+  const freshRecords = [];
+  for (const record of records) {
+    const id = String(record.id ?? '').trim();
+    if (!id || !ownedById.has(id)) {
+      freshRecords.push(record);
+      continue;
+    }
+    const current = ownedById.get(id);
+    const changed = current.kanji !== String(record.kanji ?? '').trim()
+      || current.hiragana !== String(record.hiragana ?? '').trim()
+      || current.translation !== String(record.translation ?? '').trim();
+    if (changed) {
+      return { ok: false, message: 'クラウドにあるデータと重なるため、上書きせずに中止しました。' };
+    }
+  }
+  if (!freshRecords.length || sameSequence(owned, freshRecords)) {
+    return { ok: false, message: 'このファイルはすでに読み込まれています。' };
+  }
+  let order = nextOrder(session.words || [], notebook.id);
   const createdAt = new Date().toISOString();
   const words = [];
   const identity = [];
-  for (let index = 0; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row.length !== 3) return { ok: false, message: 'CSVは「漢字,ひらがな,中文」の3列にしてください。' };
-    const [kanji, hiragana, translation] = row;
-    identity.push([kanji, hiragana, translation]);
-    const digest = await fingerprint(`${notebook.id}:${index}:${kanji}:${hiragana}:${translation}`);
-    const id = `csv-${digest}`.slice(0, 80);
+  for (let index = 0; index < freshRecords.length; index += 1) {
+    const record = freshRecords[index];
+    identity.push([
+      record.kanji, record.hiragana, record.translation, record.note || '',
+      record.highlight || '', record.highlightKanji || '', record.highlightReading || '',
+    ]);
+    const digest = await fingerprint(`${notebook.id}:${index}:${record.kanji}:${record.hiragana}:${record.translation}`);
     const shaped = shapeWordForImport({
-      id,
+      id: `add-${digest}`.slice(0, 80),
       notebookId: notebook.id,
-      kanji,
-      hiragana,
-      translation,
-      note: '',
-      translationEdited: true,
-      originWord: '',
-      originLanguage: '',
-      originEdited: false,
-      readingEdited: true,
-      glossStale: false,
-      lookupKey: '',
-      highlight: null,
-      highlightKanji: null,
-      highlightReading: null,
+      kanji: record.kanji,
+      hiragana: record.hiragana,
+      translation: record.translation,
+      note: record.note || '',
+      translationEdited: record.translationEdited !== undefined ? Boolean(record.translationEdited) : true,
+      originWord: record.originWord || '',
+      originLanguage: record.originLanguage || '',
+      originEdited: Boolean(record.originEdited),
+      readingEdited: record.readingEdited !== undefined ? Boolean(record.readingEdited) : true,
+      glossStale: Boolean(record.glossStale),
+      lookupKey: record.lookupKey || '',
+      highlight: record.highlight ?? null,
+      highlightKanji: record.highlightKanji,
+      highlightReading: record.highlightReading,
       order,
-      createdAt,
-      updatedAt: createdAt,
+      createdAt: record.createdAt || createdAt,
+      updatedAt: record.updatedAt || createdAt,
     });
-    if (!shaped.ok) return { ok: false, message: 'CSVの単語が保存できない形式です。' };
+    if (!shaped.ok) return { ok: false, message: '単語の形式が保存できないため、中止しました。' };
     words.push(shaped.word);
     order += 1;
   }
-  const contentId = await fingerprint({ kind: 'csv', notebookId: notebook.id, rows: identity });
+  const contentId = await fingerprint({ kind: contentKind, notebookId: notebook.id, rows: identity });
   const plan = finishPlan({
     session,
     contentId,
@@ -324,20 +417,55 @@ export async function planCsvImport(text, session = emptySession(), notebookId) 
     starterWordsVersion: session.starterWordsVersion || 0,
   });
   if (!plan.ok) return plan;
+  const last = lastWord(owned);
+  const added = plan.words.length;
   return {
     ...plan,
-    kind: 'csv',
-    preview: [{
-      id: notebook.id,
+    mode: 'append',
+    kind: contentKind,
+    notebooks: [],
+    practiceLogs: [],
+    totalWords: freshRecords.length,
+    append: {
+      notebookId: notebook.id,
       title: notebook.title,
-      previousTitle: '',
-      count: words.length,
-      lastKanji: words.at(-1)?.kanji || '',
-      lastHiragana: words.at(-1)?.hiragana || '',
-      locked: notebook.locked,
-      showTranslation: notebook.showTranslation,
-      autoLookup: notebook.autoLookup,
-    }],
-    totalWords: words.length,
+      currentCount: owned.length,
+      fileCount: freshRecords.length,
+      addedCount: added,
+      nextCount: owned.length + added,
+      lastKanji: last?.kanji || '',
+      lastHiragana: last?.hiragana || '',
+      rows: freshRecords.map((record) => ({
+        kanji: record.kanji,
+        hiragana: record.hiragana,
+        translation: record.translation,
+      })),
+    },
   };
+}
+
+export async function planCsvImport(text, session = emptySession(), notebookId) {
+  const table = csvTable(text);
+  if (!table.ok) return table;
+  return planAppend(table.records, session, notebookId, 'csv');
+}
+
+export async function inspectImportFile(text, kind) {
+  const table = kind === 'csv' ? csvTable(text) : jsonRecords(text);
+  if (!table.ok) return table;
+  return {
+    ok: true,
+    count: table.records.length,
+    rows: table.records.map((record) => ({
+      kanji: String(record.kanji ?? '').trim(),
+      hiragana: String(record.hiragana ?? '').trim(),
+      translation: String(record.translation ?? '').trim(),
+    })),
+  };
+}
+
+export async function planJsonAppend(text, session = emptySession(), notebookId) {
+  const table = jsonRecords(text);
+  if (!table.ok) return table;
+  return planAppend(table.records, session, notebookId, 'json-append');
 }
