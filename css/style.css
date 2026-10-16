@@ -330,7 +330,40 @@ main {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin: 8px 0 22px;
+  margin: 8px 0 14px;
+}
+
+.shelf-transfer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.shelf-transfer .btn {
+  min-height: 36px;
+  padding: 0 14px;
+}
+
+.import-preview {
+  display: grid;
+  gap: 8px;
+  line-height: 1.7;
+}
+
+.import-preview select,
+.import-preview .btn {
+  font: inherit;
+}
+
+.import-preview select {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid rgba(73, 68, 62, 0.18);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
 }
 
 .shelf-heading h2,

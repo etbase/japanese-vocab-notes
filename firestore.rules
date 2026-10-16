@@ -33,6 +33,13 @@ service cloud.firestore {
           && request.resource.data.starterWordsVersion >= 0
           && request.resource.data.importedBatches is list
           && request.resource.data.importedBatches.size() <= 20
+          && (
+            !request.resource.data.keys().hasAny(['completedImports'])
+            || (
+              request.resource.data.completedImports is list
+              && request.resource.data.completedImports.size() <= 40
+            )
+          )
           && textOk(request.resource.data.updatedAt, 1, 40);
         allow delete: if false;
       }

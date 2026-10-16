@@ -1,7 +1,7 @@
 /** 畫面切換、對話框與網址。資料寫入後由這裡重畫。 */
 
 import { getCurrentUser, readyAuth, signInWithGoogle, signOutUser, usingDemoMode, watchAuth } from './auth.js';
-import { CLAIM_TITLE, OWNER_EMAIL, isOwnerAccount } from './claim.js';
+import { deleteOwnedDocuments, writeOwnedDocuments } from './cloud.js';
 import { lookupDictionary } from './dictionary.js';
 import { needsChinese, translateJapanese } from './translate.js';
 import {
@@ -22,9 +22,13 @@ import {
   getNotebooks,
   getWordsByNotebook,
   backupArchive,
+  commitImportedState,
   hasCloudWarning,
   hasPersistenceWarning,
-  readArchiveSummary,
+  pauseCloudPush,
+  readArchiveRaw,
+  readSession,
+  resumeCloudPush,
   insertWordAt,
   ready,
   setActiveUser,
@@ -33,6 +37,7 @@ import {
   updateWord,
 } from './storage.js';
 import { judgeAnswer } from './practice.js';
+import { buildExportFile, planCsvImport, planJsonImport } from './transfer.js';
 import {
   PAGE_SIZE,
   editablePageLimit,
@@ -627,6 +632,257 @@ function render() {
   focusPending();
 }
 
+function downloadJson(filename, value) {
+  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function openExportDialog() {
+  const raw = readArchiveRaw();
+  const archive = raw ? buildExportFile(raw, 'jvn.local-demo.v1') : null;
+  const session = readSession();
+  const account = session?.notebooks?.length ? buildExportFile(JSON.stringify(session), 'account') : null;
+  if (!archive && !account) {
+    openModal({
+      title: '書き出す',
+      body: '書き出せるノートがありません。',
+      actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+    });
+    return;
+  }
+  const body = el('div', 'import-preview');
+  body.append(el('p', 'modal-text', '書き出しても、元のデータは削除も変更もしません。'));
+  if (archive?.state?.notebooks?.length) {
+    const title = archive.state.notebooks[0]?.title || 'ノート';
+    const count = Array.isArray(archive.state.words) ? archive.state.words.length : 0;
+    body.append(el('p', 'modal-text', `ブラウザ内の「${title}」は${count}語です。`));
+  }
+  const actions = [];
+  if (archive) {
+    actions.push({
+      label: 'ブラウザの単語帳',
+      className: 'btn btn-primary',
+      onClick: () => {
+        downloadJson('jvn-backup.json', archive);
+        closeModal();
+      },
+    });
+  }
+  if (account) {
+    actions.push({
+      label: 'ログイン中のノート',
+      className: 'btn btn-ghost',
+      onClick: () => {
+        downloadJson('jvn-account-backup.json', account);
+        closeModal();
+      },
+    });
+  }
+  actions.push({ label: 'キャンセル', className: 'btn btn-ghost', onClick: () => closeModal() });
+  openModal({ title: '書き出す', body, actions });
+}
+
+function requireSignIn() {
+  if (getCurrentUser().uid) return true;
+  openModal({
+    title: 'ログイン',
+    body: 'ログインすると、自分のノートに読み込めます。',
+    actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+  });
+  return false;
+}
+
+function fillPreview(container, plan) {
+  const target = plan.preview[0];
+  container.append(el('p', 'modal-text', plan.kind === 'csv'
+    ? `「${target?.title || 'ノート'}」に${plan.totalWords}語を追加します。`
+    : `${plan.preview.length}冊、${plan.totalWords}語を読み込みます。`));
+  plan.preview.forEach((item) => {
+    const rename = item.previousTitle ? `名前は「${item.previousTitle}」から「${item.title}」になります。` : '';
+    const last = item.lastKanji ? `最後は「${item.lastKanji}」。` : '';
+    container.append(el('p', 'modal-text', `「${item.title}」${item.count}語。${last}${rename}`));
+  });
+  if (plan.kind === 'json') {
+    container.append(el('p', 'modal-text', '平仮名、中文、順序、マーカー、設定もそのまま移します。'));
+  }
+  container.append(el('p', 'modal-text', 'クラウドの既存データは上書きも削除もしません。確認するまで保存しません。'));
+  if (!plan.words.length && !plan.notebooks.length && !plan.practiceLogs.length) {
+    container.append(el('p', 'modal-text', '同じ内容はすでにあります。記録だけ残します。'));
+  } else if (plan.words.length !== plan.totalWords) {
+    container.append(el('p', 'modal-text', `新しく保存するのは${plan.words.length}語です。`));
+  }
+}
+
+let importBusy = false;
+
+async function applyImport(plan, button) {
+  if (!plan?.ok || importBusy) return;
+  const user = getCurrentUser();
+  if (!user.uid) {
+    closeModal();
+    requireSignIn();
+    return;
+  }
+  importBusy = true;
+  if (button) button.disabled = true;
+  const uid = user.uid;
+  pauseCloudPush();
+  const written = await writeOwnedDocuments(uid, {
+    notebooks: plan.notebooks,
+    words: plan.words,
+    practiceLogs: plan.practiceLogs,
+    meta: { ...plan.meta, updatedAt: new Date().toISOString() },
+  });
+  if (!written.ok) {
+    const undone = await deleteOwnedDocuments(uid, written.created);
+    resumeCloudPush();
+    importBusy = false;
+    closeModal();
+    openModal({
+      title: '読み込めませんでした',
+      body: undone.ok
+        ? 'クラウドには保存されていません。もう一度読み込めます。'
+        : '保存を取り消せませんでした。同じファイルは、重なるデータがあると上書きせずに止まります。',
+      actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+    });
+    return;
+  }
+  if (getCurrentUser().uid !== uid) {
+    resumeCloudPush();
+    importBusy = false;
+    closeModal();
+    return;
+  }
+  const session = readSession();
+  resumeCloudPush();
+  commitImportedState({
+    ...session,
+    starterWordsVersion: plan.meta.starterWordsVersion,
+    importedBatches: plan.meta.importedBatches,
+    completedImports: plan.meta.completedImports,
+    notebooks: [...session.notebooks, ...plan.notebooks],
+    words: [...session.words, ...plan.words],
+    practiceLogs: [...session.practiceLogs, ...plan.practiceLogs],
+  });
+  importBusy = false;
+  closeModal();
+  render();
+}
+
+function showPlan(plan) {
+  if (!plan?.ok) {
+    openModal({
+      title: '読み込む',
+      body: plan?.message || 'このファイルは読み込めません。',
+      actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+    });
+    return;
+  }
+  const body = el('div', 'import-preview');
+  fillPreview(body, plan);
+  const actions = el('div', 'modal-actions');
+  const cancel = el('button', 'btn btn-ghost', 'キャンセル');
+  cancel.type = 'button';
+  cancel.addEventListener('click', () => closeModal());
+  const confirm = el('button', 'btn btn-primary', '読み込む');
+  confirm.type = 'button';
+  confirm.addEventListener('click', () => applyImport(plan, confirm));
+  actions.append(cancel, confirm);
+  body.append(actions);
+  openModal({ title: '読み込みの確認', body, actions: [] });
+}
+
+function openCsvPreview(text) {
+  const notebooks = readSession()?.notebooks || [];
+  if (!notebooks.length) {
+    openModal({
+      title: '読み込む',
+      body: '追加先のノートがありません。先にノートを作成してください。',
+      actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+    });
+    return;
+  }
+  const body = el('div', 'import-preview');
+  const summary = el('div');
+  body.append(summary);
+  let selected = notebooks[0].id;
+  let plan = null;
+  let ticket = 0;
+  const confirm = el('button', 'btn btn-primary', '読み込む');
+  confirm.type = 'button';
+  confirm.disabled = true;
+  const refresh = async () => {
+    const current = ticket + 1;
+    ticket = current;
+    confirm.disabled = true;
+    const next = await planCsvImport(text, readSession(), selected);
+    if (current !== ticket) return;
+    plan = next;
+    summary.replaceChildren();
+    if (!plan.ok) {
+      summary.append(el('p', 'modal-text', plan.message));
+      return;
+    }
+    fillPreview(summary, plan);
+    confirm.disabled = false;
+  };
+  if (notebooks.length > 1) {
+    const label = el('label', 'field');
+    label.append(el('span', 'field-label', '追加先のノート'));
+    const select = document.createElement('select');
+    notebooks.forEach((notebook) => {
+      const option = document.createElement('option');
+      option.value = notebook.id;
+      option.textContent = notebook.title;
+      select.append(option);
+    });
+    select.addEventListener('change', () => {
+      selected = select.value;
+      refresh();
+    });
+    label.append(select);
+    body.append(label);
+  } else {
+    body.append(el('p', 'modal-text', `追加先は「${notebooks[0].title}」です。`));
+  }
+  const actions = el('div', 'modal-actions');
+  const cancel = el('button', 'btn btn-ghost', 'キャンセル');
+  cancel.type = 'button';
+  cancel.addEventListener('click', () => closeModal());
+  confirm.addEventListener('click', () => applyImport(plan, confirm));
+  actions.append(cancel, confirm);
+  body.append(actions);
+  openModal({ title: '読み込みの確認', body, actions: [] });
+  refresh();
+}
+
+function openImportDialog() {
+  if (!requireSignIn()) return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,.csv,application/json,text/csv';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const name = file.name.toLowerCase();
+    const trimmed = text.trimStart();
+    if (name.endsWith('.csv') || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
+      openCsvPreview(text);
+      return;
+    }
+    showPlan(await planJsonImport(text, readSession()));
+  });
+  input.click();
+}
+
 function renderShelfView(root, freshId) {
   const notebooks = getNotebooks();
   const wordsByNotebook = new Map(
@@ -639,15 +895,9 @@ function renderShelfView(root, freshId) {
     onCreate: () => openNotebookDialog('create'),
     onEdit: (notebook) => openNotebookDialog('edit', notebook),
     onDelete: confirmDelete,
+    onExport: openExportDialog,
+    onImport: openImportDialog,
   });
-  const summary = readArchiveSummary();
-  const user = getCurrentUser();
-  const alreadyClaimed = notebooks.some((notebook) => notebook.title === CLAIM_TITLE);
-  if (isOwnerAccount(user) && summary && !alreadyClaimed) {
-    const note = el('p', 'claim-note');
-    note.textContent = `このブラウザの「${summary.title}」は${summary.count}語です。最後は「${summary.lastKanji}」。確認後、${OWNER_EMAIL}（UID ${user.uid}）のクラウドだけに「${CLAIM_TITLE}」として移します。ブラウザ内の元データは削除しません。`;
-    root.append(note);
-  }
 }
 
 function step(direction) {

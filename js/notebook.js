@@ -69,7 +69,9 @@ function markNode(text, highlight, fresh, ink) {
   return mark;
 }
 
-export function renderShelf(container, { notebooks, wordsByNotebook, onCreate, onEdit, onDelete, freshId }) {
+export function renderShelf(container, {
+  notebooks, wordsByNotebook, onCreate, onEdit, onDelete, onExport, onImport, freshId,
+}) {
   const section = el('section', 'shelf');
   section.setAttribute('aria-labelledby', 'shelf-title');
 
@@ -82,6 +84,16 @@ export function renderShelf(container, { notebooks, wordsByNotebook, onCreate, o
   header.append(headingWrap);
   if (notebooks.length) header.append(el('p', 'shelf-count', `${notebooks.length}冊`));
   section.append(header);
+
+  const transfer = el('div', 'shelf-transfer');
+  const exportButton = el('button', 'btn btn-ghost', '書き出す');
+  exportButton.type = 'button';
+  exportButton.addEventListener('click', () => onExport?.());
+  const importButton = el('button', 'btn btn-ghost', '読み込む');
+  importButton.type = 'button';
+  importButton.addEventListener('click', () => onImport?.());
+  transfer.append(exportButton, importButton);
+  section.append(transfer);
 
   if (!notebooks.length) {
     const empty = el('div', 'empty-shelf');

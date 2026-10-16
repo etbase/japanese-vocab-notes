@@ -42,6 +42,7 @@ export async function pullUserState(uid) {
         version: 1,
         starterWordsVersion: meta.starterWordsVersion || 0,
         importedBatches: meta.importedBatches || [],
+        completedImports: meta.completedImports || [],
         notebooks: dataOf(notebooksSnap),
         words: dataOf(wordsSnap),
         practiceLogs: dataOf(logsSnap),
@@ -108,9 +109,73 @@ export async function pushUserState(uid, state) {
       data: {
         starterWordsVersion: state.starterWordsVersion || 0,
         importedBatches: state.importedBatches || [],
+        completedImports: state.completedImports || [],
         updatedAt: new Date().toISOString(),
       },
     });
+    await commitOps(mod, db, ops);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function writeOwnedDocuments(uid, { notebooks = [], words = [], practiceLogs = [], meta = null } = {}) {
+  if (!uid) return { ok: false, created: [] };
+  const created = [];
+  try {
+    const store = await api();
+    if (!store) return { ok: false, created };
+    const { db, mod } = store;
+    const ops = [];
+    const pushSet = (collectionName, item) => {
+      const id = String(item?.id ?? '');
+      if (!id || id.includes('/')) throw new Error('bad-id');
+      const data = { ...item };
+      delete data.id;
+      ops.push({
+        ref: mod.doc(db, 'users', uid, collectionName, id),
+        data,
+        created: { collectionName, id },
+      });
+    };
+    notebooks.forEach((item) => pushSet('notebooks', item));
+    words.forEach((item) => pushSet('words', item));
+    practiceLogs.forEach((item) => pushSet('practiceLogs', item));
+    for (let index = 0; index < ops.length; index += BATCH_LIMIT) {
+      const slice = ops.slice(index, index + BATCH_LIMIT);
+      const batch = mod.writeBatch(db);
+      slice.forEach((op) => batch.set(op.ref, op.data));
+      await batch.commit();
+      created.push(...slice.map((op) => op.created));
+    }
+    if (meta) {
+      await mod.setDoc(mod.doc(db, 'users', uid, 'private', 'state'), {
+        starterWordsVersion: meta.starterWordsVersion || 0,
+        importedBatches: meta.importedBatches || [],
+        completedImports: meta.completedImports || [],
+        updatedAt: meta.updatedAt || new Date().toISOString(),
+      });
+    }
+    return { ok: true, created };
+  } catch {
+    return { ok: false, created };
+  }
+}
+
+export async function deleteOwnedDocuments(uid, created) {
+  if (!uid || !created?.length) return { ok: true };
+  try {
+    const store = await api();
+    if (!store) return { ok: false };
+    const { db, mod } = store;
+    const ops = created
+      .filter((item) => ['notebooks', 'words', 'practiceLogs'].includes(item.collectionName))
+      .filter((item) => item.id && !String(item.id).includes('/'))
+      .map((item) => ({
+        type: 'delete',
+        ref: mod.doc(db, 'users', uid, item.collectionName, item.id),
+      }));
     await commitOps(mod, db, ops);
     return { ok: true };
   } catch {

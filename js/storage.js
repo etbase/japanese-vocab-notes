@@ -63,6 +63,25 @@ export function backupArchive() {
   return true;
 }
 
+export function readArchiveRaw() {
+  if (!canUseStorage()) return null;
+  return localStorage.getItem(ARCHIVE_KEY);
+}
+
+export function readSession() {
+  if (!userId) return null;
+  const state = load();
+  return {
+    version: 1,
+    starterWordsVersion: state.starterWordsVersion || 0,
+    importedBatches: [...(state.importedBatches || [])],
+    completedImports: [...(state.completedImports || [])],
+    notebooks: state.notebooks.map(copyNotebook),
+    words: state.words.map(copyWord),
+    practiceLogs: state.practiceLogs.map((log) => ({ ...log })),
+  };
+}
+
 export function readArchiveSummary() {
   if (!canUseStorage()) return null;
   const raw = localStorage.getItem(ARCHIVE_KEY);
@@ -161,7 +180,7 @@ function parseLoanPair(value) {
   return null;
 }
 
-function cleanWord(input, { strict = false } = {}) {
+function cleanWord(input, { strict = false, preserveGloss = false } = {}) {
   if (!input || typeof input !== 'object') return null;
   const id = String(input.id ?? '').trim();
   const notebookId = String(input.notebookId ?? '').trim();
@@ -178,10 +197,11 @@ function cleanWord(input, { strict = false } = {}) {
     : (HIGHLIGHTS.has(input.highlightReading) ? input.highlightReading : null);
   const createdAt = String(input.createdAt || nowIso());
   const order = Number.isFinite(input.order) ? Math.max(0, Math.floor(input.order)) : 0;
-  const gloss = splitLoanGloss(
-    String(input.translation ?? '').slice(0, 80),
-    String(input.originWord ?? '').slice(0, 80),
-  );
+  const translationText = String(input.translation ?? '').trim().slice(0, 80);
+  const originText = String(input.originWord ?? '').trim().slice(0, 80);
+  const gloss = preserveGloss
+    ? { translation: translationText, originWord: originText, changed: false }
+    : splitLoanGloss(translationText, originText);
   return {
     id,
     notebookId,
@@ -203,6 +223,55 @@ function cleanWord(input, { strict = false } = {}) {
     createdAt,
     updatedAt: String(input.updatedAt || createdAt),
   };
+}
+
+export function shapeNotebookForImport(input, { title } = {}) {
+  if (!input || typeof input !== 'object') return { ok: false, reason: 'notebook' };
+  const source = { ...input };
+  if (title) source.title = title;
+  const titleText = String(source.title ?? '').trim();
+  if (!titleText || titleText.length > 30) return { ok: false, reason: 'title' };
+  if (source.color != null && source.color !== '' && !/^[a-z]{1,20}$/.test(String(source.color).trim())) {
+    return { ok: false, reason: 'color' };
+  }
+  if (source.type != null && source.type !== 'kanji' && source.type !== 'katakana') {
+    return { ok: false, reason: 'type' };
+  }
+  const notebook = cleanNotebook(source);
+  if (!notebook || notebook.title !== titleText) return { ok: false, reason: 'notebook' };
+  return { ok: true, notebook };
+}
+
+export function shapeWordForImport(input) {
+  if (!input || typeof input !== 'object') return { ok: false, reason: 'word' };
+  const id = String(input.id ?? '').trim();
+  const notebookId = String(input.notebookId ?? '').trim();
+  const kanji = String(input.kanji ?? '').trim();
+  const hiragana = normalizeReading(input.hiragana);
+  const translation = String(input.translation ?? '').trim();
+  const note = String(input.note ?? '');
+  const originWord = String(input.originWord ?? '').trim();
+  const originLanguage = String(input.originLanguage ?? '').trim();
+  const lookupKey = String(input.lookupKey ?? '').trim();
+  if (!id || id.includes('/') || !notebookId || notebookId.includes('/')) return { ok: false, reason: 'word' };
+  if (!Number.isInteger(input.order) || input.order < 0) return { ok: false, reason: 'order' };
+  if (typeof input.createdAt !== 'string' || !input.createdAt.trim()) return { ok: false, reason: 'time' };
+  if (kanji.length > 40) return { ok: false, reason: 'kanji' };
+  if (hiragana.length > 80) return { ok: false, reason: 'hiragana' };
+  if (translation.length > 80) return { ok: false, reason: 'translation' };
+  if (note.length > 500) return { ok: false, reason: 'note' };
+  if (originWord.length > 80 || originLanguage.length > 40 || lookupKey.length > 40) return { ok: false, reason: 'field' };
+  if (!kanji && !hiragana) return { ok: false, reason: 'empty' };
+  for (const key of ['highlight', 'highlightKanji', 'highlightReading']) {
+    const value = input[key];
+    if (value != null && value !== '' && !HIGHLIGHTS.has(value)) return { ok: false, reason: 'highlight' };
+  }
+  const word = cleanWord(input, { preserveGloss: true });
+  if (!word || word.kanji !== kanji || word.hiragana !== hiragana) return { ok: false, reason: 'word' };
+  if (word.translation !== translation || word.originWord !== originWord || word.note !== note) {
+    return { ok: false, reason: 'translation' };
+  }
+  return { ok: true, word };
 }
 
 function normalizeReading(value) {
@@ -428,6 +497,7 @@ function normalizeState(data) {
     version: 1,
     starterWordsVersion,
     importedBatches: cleanBatches(data?.importedBatches),
+    completedImports: cleanBatches(data?.completedImports),
     notebooks,
     words,
     practiceLogs,
@@ -439,6 +509,7 @@ function emptyState() {
     version: 1,
     starterWordsVersion: 0,
     importedBatches: [],
+    completedImports: [],
     notebooks: [],
     words: [],
     practiceLogs: [],
@@ -488,6 +559,39 @@ function load() {
   }
   memory = loadCachedState() || emptyState();
   return memory;
+}
+
+export function canonicalArchiveState() {
+  const state = createSeedState();
+  importPhotoVocabBatch(state);
+  return normalizeState(state);
+}
+
+export function normalizeImportedState(data) {
+  return normalizeState(data);
+}
+
+export function pauseCloudPush() {
+  hydrating = true;
+  clearTimeout(pushTimer);
+}
+
+export function resumeCloudPush() {
+  hydrating = false;
+}
+
+export function commitImportedState(next) {
+  memory = {
+    version: 1,
+    starterWordsVersion: next?.starterWordsVersion || 0,
+    importedBatches: [...(next?.importedBatches || [])],
+    completedImports: [...(next?.completedImports || [])],
+    notebooks: (next?.notebooks || []).map(copyNotebook),
+    words: (next?.words || []).map(copyWord),
+    practiceLogs: (next?.practiceLogs || []).map((log) => ({ ...log })),
+  };
+  memoryUser = userId;
+  persistLocal();
 }
 
 export async function ready() {
