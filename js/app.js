@@ -1558,8 +1558,14 @@ function renderAccount() {
   const user = getCurrentUser();
   if (!button || !badge || !chip || !avatar || !name) return;
   button.disabled = false;
-  if (usingDemoMode() || user.isDemo) {
+  const hideAccount = () => {
     chip.hidden = true;
+    name.textContent = '';
+    avatar.hidden = true;
+    avatar.removeAttribute('src');
+  };
+  if (usingDemoMode() || user.isDemo) {
+    hideAccount();
     badge.hidden = false;
     badge.textContent = 'デモ';
     button.hidden = false;
@@ -1586,7 +1592,7 @@ function renderAccount() {
     };
     return;
   }
-  chip.hidden = true;
+  hideAccount();
   button.hidden = false;
   button.textContent = 'ログイン';
   button.onclick = async () => {

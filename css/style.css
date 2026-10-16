@@ -186,6 +186,11 @@ svg {
   max-width: 220px;
 }
 
+.account-chip[hidden],
+.account-avatar[hidden] {
+  display: none;
+}
+
 .account-avatar {
   width: 28px;
   height: 28px;
