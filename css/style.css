@@ -214,6 +214,17 @@ svg {
   font-size: 14px;
 }
 
+.claim-note {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--milk);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
 main {
   padding-bottom: calc(28px + env(safe-area-inset-bottom));
 }

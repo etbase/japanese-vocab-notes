@@ -1,6 +1,7 @@
 /** 畫面切換、對話框與網址。資料寫入後由這裡重畫。 */
 
 import { getCurrentUser, readyAuth, signInWithGoogle, signOutUser, usingDemoMode, watchAuth } from './auth.js';
+import { CLAIM_TITLE, OWNER_EMAIL, isOwnerAccount } from './claim.js';
 import { lookupDictionary } from './dictionary.js';
 import { needsChinese, translateJapanese } from './translate.js';
 import {
@@ -20,7 +21,10 @@ import {
   getNotebook,
   getNotebooks,
   getWordsByNotebook,
+  backupArchive,
+  hasCloudWarning,
   hasPersistenceWarning,
+  readArchiveSummary,
   insertWordAt,
   ready,
   setActiveUser,
@@ -105,7 +109,10 @@ function isCompact() {
 function syncWarning() {
   const note = document.querySelector('#save-warning');
   if (!note) return;
-  if (hasPersistenceWarning()) {
+  if (hasCloudWarning()) {
+    note.hidden = false;
+    note.textContent = 'クラウドに保存できませんでした。ログインと通信を確認してください。';
+  } else if (hasPersistenceWarning()) {
     note.hidden = false;
     note.textContent = 'ブラウザに保存できませんでした。読み込み直すと、変更が残らないことがあります。';
   } else {
@@ -633,6 +640,14 @@ function renderShelfView(root, freshId) {
     onEdit: (notebook) => openNotebookDialog('edit', notebook),
     onDelete: confirmDelete,
   });
+  const summary = readArchiveSummary();
+  const user = getCurrentUser();
+  const alreadyClaimed = notebooks.some((notebook) => notebook.title === CLAIM_TITLE);
+  if (isOwnerAccount(user) && summary && !alreadyClaimed) {
+    const note = el('p', 'claim-note');
+    note.textContent = `このブラウザの「${summary.title}」は${summary.count}語です。最後は「${summary.lastKanji}」。確認後、${OWNER_EMAIL}（UID ${user.uid}）のクラウドだけに「${CLAIM_TITLE}」として移します。ブラウザ内の元データは削除しません。`;
+    root.append(note);
+  }
 }
 
 function step(direction) {
@@ -1109,6 +1124,14 @@ function confirmDeleteLine(slot) {
 }
 
 function openNotebookDialog(mode, notebook) {
+  if (mode === 'create' && !getCurrentUser().uid) {
+    openModal({
+      title: 'ログイン',
+      body: 'ログインすると、自分のノートを保存できます。',
+      actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+    });
+    return;
+  }
   const form = el('form', 'notebook-form');
   form.id = 'notebook-form';
 
@@ -1330,8 +1353,44 @@ function renderAccount() {
   };
 }
 
+let sessionUserId = null;
+let sessionQueue = Promise.resolve();
+
+function resetViewState() {
+  state.view = 'shelf';
+  state.notebookId = null;
+  state.page = 1;
+  state.study = null;
+  state.answers = {};
+  state.revealed = {};
+  state.showResult = false;
+  state.focusDraft = '';
+  state.turn = null;
+  if (location.hash && location.hash !== '#/' && location.hash !== '#') {
+    history.replaceState(null, '', '#/');
+  }
+}
+
+async function adoptUser(user) {
+  const next = user?.uid && !user.isDemo ? user.uid : '';
+  if (next === sessionUserId) return;
+  const switching = sessionUserId !== null;
+  if (switching) {
+    flushLineEdits();
+    flushGlossEdits();
+    resetViewState();
+  }
+  sessionUserId = next;
+  setActiveUser(next);
+  await ready();
+  if (switching) render();
+}
+
 function bindChrome() {
-  watchAuth(renderAccount);
+  watchAuth((user) => {
+    renderAccount();
+    sessionQueue = sessionQueue.then(() => adoptUser(user)).catch(() => {});
+  });
   document.querySelector('.brand')?.addEventListener('click', () => {
     state.turn = null;
   });
@@ -1373,11 +1432,10 @@ function showFatal() {
 
 async function start() {
   applyCompact();
+  backupArchive();
   await readyAuth();
-  // 既有單字留在 jvn.local-demo.v1。這個階段不把筆記本改掛到 Google UID。
-  setActiveUser('local-demo');
-  await ready();
   bindChrome();
+  await sessionQueue;
   bindKeys();
   window.addEventListener('hashchange', syncFromHash);
   window.addEventListener('popstate', syncFromHash);

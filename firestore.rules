@@ -13,17 +13,39 @@ service cloud.firestore {
       return value is string && value.size() >= min && value.size() <= max;
     }
 
+    function colorOk(value) {
+      return value == null || value in ['yellow', 'pink', 'green'];
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId);
       allow create, update: if isOwner(userId)
-        && textOk(request.resource.data.displayName, 0, 80);
+        && textOk(request.resource.data.displayName, 0, 80)
+        && textOk(request.resource.data.photoURL, 0, 1000)
+        && textOk(request.resource.data.email, 0, 120)
+        && textOk(request.resource.data.updatedAt, 1, 40);
       allow delete: if false;
+
+      match /private/state {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.starterWordsVersion is int
+          && request.resource.data.starterWordsVersion >= 0
+          && request.resource.data.importedBatches is list
+          && request.resource.data.importedBatches.size() <= 20
+          && textOk(request.resource.data.updatedAt, 1, 40);
+        allow delete: if false;
+      }
 
       match /notebooks/{notebookId} {
         allow read: if isOwner(userId);
         allow create, update: if isOwner(userId)
           && textOk(request.resource.data.title, 1, 30)
           && textOk(request.resource.data.color, 1, 20)
+          && request.resource.data.type in ['kanji', 'katakana']
+          && request.resource.data.autoLookup is bool
+          && request.resource.data.showTranslation is bool
+          && request.resource.data.locked is bool
           && request.resource.data.createdAt is string
           && request.resource.data.updatedAt is string;
         allow delete: if isOwner(userId);
@@ -33,12 +55,22 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow create, update: if isOwner(userId)
           && textOk(request.resource.data.notebookId, 1, 80)
-          && textOk(request.resource.data.kanji, 1, 40)
-          && textOk(request.resource.data.hiragana, 1, 80)
+          && textOk(request.resource.data.kanji, 0, 40)
+          && textOk(request.resource.data.hiragana, 0, 80)
+          && (request.resource.data.kanji.size() > 0 || request.resource.data.hiragana.size() > 0)
           && request.resource.data.note is string
           && request.resource.data.note.size() <= 500
-          && (request.resource.data.highlight == null
-            || request.resource.data.highlight in ['yellow', 'pink', 'green'])
+          && textOk(request.resource.data.translation, 0, 80)
+          && textOk(request.resource.data.originWord, 0, 80)
+          && textOk(request.resource.data.originLanguage, 0, 40)
+          && textOk(request.resource.data.lookupKey, 0, 40)
+          && request.resource.data.translationEdited is bool
+          && request.resource.data.originEdited is bool
+          && request.resource.data.readingEdited is bool
+          && request.resource.data.glossStale is bool
+          && colorOk(request.resource.data.highlight)
+          && colorOk(request.resource.data.highlightKanji)
+          && colorOk(request.resource.data.highlightReading)
           && request.resource.data.order is int
           && request.resource.data.order >= 0
           && request.resource.data.createdAt is string

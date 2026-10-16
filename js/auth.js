@@ -60,6 +60,11 @@ export function readyAuth() {
   return authReady;
 }
 
+export async function getFirebaseApp() {
+  await readyAuth();
+  return authApi?.app || null;
+}
+
 async function initAuth() {
   if (!isFirebaseConfigured()) {
     publish({ ...DEMO_USER });

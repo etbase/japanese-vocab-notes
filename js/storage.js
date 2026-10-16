@@ -5,6 +5,7 @@
  * 遠端同步可呼叫 notify()。
  */
 
+import { pullUserState, pushUserState } from './cloud.js';
 import { STARTER_WORD_ROWS } from './starter-words.js';
 import { PHOTO_VOCAB_BATCH_ID, PHOTO_VOCAB_ROWS } from './vocab-batch-20261014.js';
 import { PHOTO_1113_BATCH_ID, PHOTO_1113_ROWS } from './vocab-batch-20261014-11-13.js';
@@ -13,10 +14,16 @@ import { isHiragana, normalizeText } from './vocabulary.js';
 const HIGHLIGHTS = new Set(['yellow', 'pink', 'green']);
 const listeners = new Set();
 
-let userId = 'local-demo';
+const ARCHIVE_KEY = 'jvn.local-demo.v1';
+const ARCHIVE_BACKUP_KEY = 'jvn.local-demo.v1.backup-20261016';
+
+let userId = '';
 let memory = null;
 let memoryUser = null;
+let hydrating = false;
 let persistenceWarning = false;
+let cloudWarning = false;
+let pushTimer = 0;
 
 export function subscribe(listener) {
   listeners.add(listener);
@@ -31,13 +38,53 @@ export function hasPersistenceWarning() {
   return persistenceWarning;
 }
 
+export function hasCloudWarning() {
+  return cloudWarning;
+}
+
 export function setActiveUser(id) {
-  userId = String(id || 'local-demo');
-  if (memoryUser !== userId) memory = null;
+  const next = String(id || '');
+  if (next === userId) return;
+  userId = next;
+  memory = null;
+  memoryUser = null;
+  cloudWarning = false;
 }
 
 export function storageKey() {
-  return `jvn.${userId}.v1`;
+  return userId ? `jvn.${userId}.v1` : '';
+}
+
+export function backupArchive() {
+  if (!canUseStorage()) return false;
+  const raw = localStorage.getItem(ARCHIVE_KEY);
+  if (!raw) return false;
+  if (!localStorage.getItem(ARCHIVE_BACKUP_KEY)) localStorage.setItem(ARCHIVE_BACKUP_KEY, raw);
+  return true;
+}
+
+export function readArchiveSummary() {
+  if (!canUseStorage()) return null;
+  const raw = localStorage.getItem(ARCHIVE_KEY);
+  if (!raw) return null;
+  try {
+    const data = normalizeState(JSON.parse(raw));
+    const notebook = data.notebooks.find((item) => item.id === STARTER_ID) || data.notebooks[0];
+    if (!notebook) return null;
+    const words = data.words
+      .filter((word) => word.notebookId === notebook.id)
+      .sort((a, b) => a.order - b.order || String(a.createdAt).localeCompare(String(b.createdAt)));
+    const last = words.at(-1);
+    return {
+      notebookId: notebook.id,
+      title: notebook.title,
+      count: words.length,
+      lastKanji: last?.kanji || '',
+      lastHiragana: last?.hiragana || '',
+    };
+  } catch {
+    return null;
+  }
 }
 
 function nowIso() {
@@ -387,11 +434,19 @@ function normalizeState(data) {
   };
 }
 
-function persist() {
-  if (!canUseStorage()) {
-    persistenceWarning = true;
-    return;
-  }
+function emptyState() {
+  return {
+    version: 1,
+    starterWordsVersion: 0,
+    importedBatches: [],
+    notebooks: [],
+    words: [],
+    practiceLogs: [],
+  };
+}
+
+function persistLocal() {
+  if (!userId || !memory || !canUseStorage()) return;
   try {
     localStorage.setItem(storageKey(), JSON.stringify(memory));
     persistenceWarning = false;
@@ -400,43 +455,61 @@ function persist() {
   }
 }
 
+function persist() {
+  persistLocal();
+  if (hydrating || !userId || !memory) return;
+  clearTimeout(pushTimer);
+  const snapshot = memory;
+  const uid = userId;
+  pushTimer = setTimeout(() => {
+    pushUserState(uid, snapshot).then((result) => {
+      cloudWarning = !result.ok;
+    });
+  }, 500);
+}
+
+function loadCachedState() {
+  if (!userId || !canUseStorage()) return null;
+  const raw = localStorage.getItem(storageKey());
+  if (!raw) return null;
+  try {
+    return normalizeState(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 function load() {
   if (memory && memoryUser === userId) return memory;
   memoryUser = userId;
-  if (!canUseStorage()) {
-    persistenceWarning = true;
-    memory = createSeedState();
-    importPhotoVocabBatch(memory);
+  if (!userId) {
+    memory = emptyState();
     return memory;
   }
-  persistenceWarning = false;
-  const raw = localStorage.getItem(storageKey());
-  if (!raw) {
-    memory = createSeedState();
-    importPhotoVocabBatch(memory);
-    persist();
-    return memory;
-  }
-  try {
-    glossMigrated = false;
-    memory = normalizeState(JSON.parse(raw));
-    if (isUntouchedSample(memory)) {
-      memory = createSeedState();
-      importPhotoVocabBatch(memory);
-      persist();
-    } else if (migrateStarterNotebook(memory) || importPhotoVocabBatch(memory) || glossMigrated) {
-      persist();
-    }
-  } catch {
-    memory = createSeedState();
-    importPhotoVocabBatch(memory);
-    persist();
-  }
+  memory = loadCachedState() || emptyState();
   return memory;
 }
 
 export async function ready() {
-  load();
+  backupArchive();
+  if (memory && memoryUser === userId) return;
+  memoryUser = userId;
+  if (!userId) {
+    memory = emptyState();
+    return;
+  }
+  hydrating = true;
+  const remote = await pullUserState(userId);
+  if (remote?.ok) {
+    memory = normalizeState(remote.state);
+    persistLocal();
+  } else if (remote?.missing) {
+    memory = loadCachedState() || emptyState();
+  } else {
+    cloudWarning = true;
+    memory = loadCachedState() || emptyState();
+  }
+  hydrating = false;
 }
 
 function copyNotebook(notebook) {
@@ -445,6 +518,12 @@ function copyNotebook(notebook) {
 
 function copyWord(word) {
   return { ...word };
+}
+
+function sessionState() {
+  const state = load();
+  if (!userId) return null;
+  return state;
 }
 
 export function getNotebooks() {
@@ -469,7 +548,8 @@ export function getWordsByNotebook(notebookId) {
 }
 
 export async function createNotebook({ title, color, type, autoLookup, showTranslation }) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   const notebook = cleanNotebook({
     id: createId(),
     title,
@@ -487,7 +567,8 @@ export async function createNotebook({ title, color, type, autoLookup, showTrans
 }
 
 export async function updateNotebook(id, patch) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   const current = state.notebooks.find((notebook) => notebook.id === id);
   if (!current) return { ok: false, message: 'ノートが見つかりません' };
   const next = cleanNotebook({
@@ -507,7 +588,8 @@ export async function updateNotebook(id, patch) {
 }
 
 export async function deleteNotebook(id) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   const exists = state.notebooks.some((notebook) => notebook.id === id);
   if (!exists) return { ok: false, message: 'ノートが見つかりません' };
   state.notebooks = state.notebooks.filter((notebook) => notebook.id !== id);
@@ -518,7 +600,8 @@ export async function deleteNotebook(id) {
 }
 
 export async function addWords(notebookId, entries) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   if (!state.notebooks.some((notebook) => notebook.id === notebookId)) {
     return { ok: false, message: 'ノートが見つかりません' };
   }
@@ -560,7 +643,8 @@ export async function addWords(notebookId, entries) {
 }
 
 export async function updateWord(wordId, patch) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   const current = state.words.find((word) => word.id === wordId);
   if (!current) return { ok: false, message: '単語が見つかりません' };
   const next = cleanWord(wordPatch(current, patch, nowIso()), { strict: false });
@@ -597,7 +681,8 @@ function blankWord(notebookId, order, timestamp) {
 }
 
 export async function ensureWordAt(notebookId, index, patch = {}) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   if (!state.notebooks.some((notebook) => notebook.id === notebookId)) {
     return { ok: false, message: 'ノートが見つかりません' };
   }
@@ -623,7 +708,8 @@ export async function ensureWordAt(notebookId, index, patch = {}) {
 }
 
 export async function insertWordAt(notebookId, index) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   if (!state.notebooks.some((notebook) => notebook.id === notebookId)) {
     return { ok: false, message: 'ノートが見つかりません' };
   }
@@ -640,7 +726,8 @@ export async function insertWordAt(notebookId, index) {
 }
 
 export async function deleteWord(wordId) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   const current = state.words.find((word) => word.id === wordId);
   if (!current) return { ok: false, message: '単語が見つかりません' };
   const notebookId = current.notebookId;
@@ -677,7 +764,8 @@ export async function setHighlight(wordId, color, field = 'kanji') {
   if (highlight !== null && !HIGHLIGHTS.has(highlight)) {
     return { ok: false, message: 'マーカーの色が正しくありません' };
   }
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   const current = state.words.find((word) => word.id === wordId);
   if (!current) return { ok: false, message: '単語が見つかりません' };
   const reading = current.highlightReading !== undefined ? current.highlightReading : (current.highlight || null);
@@ -689,7 +777,8 @@ export async function setHighlight(wordId, color, field = 'kanji') {
 }
 
 export async function addPracticeLog(entry) {
-  const state = load();
+  const state = sessionState();
+  if (!state) return { ok: false, message: 'ログインしてください' };
   if (!state.notebooks.some((notebook) => notebook.id === entry?.notebookId)) {
     return { ok: false, message: 'ノートが見つかりません' };
   }
