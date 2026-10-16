@@ -1,6 +1,6 @@
 /** 畫面切換、對話框與網址。資料寫入後由這裡重畫。 */
 
-import { getCurrentUser, usingDemoMode } from './auth.js';
+import { getCurrentUser, readyAuth, signInWithGoogle, signOutUser, usingDemoMode, watchAuth } from './auth.js';
 import { lookupDictionary } from './dictionary.js';
 import { needsChinese, translateJapanese } from './translate.js';
 import {
@@ -1270,16 +1270,68 @@ function openDemoDialog() {
   });
 }
 
-function bindChrome() {
+function authMessage(reason) {
+  if (reason === 'auth/unauthorized-domain') return 'このサイトは Firebase の承認済みドメインに入っていません。';
+  if (reason === 'auth/popup-blocked') return 'ログイン画面を開けませんでした。もう一度試してください。';
+  return 'ログインできませんでした。しばらくしてからもう一度試してください。';
+}
+
+function renderAccount() {
   const button = document.querySelector('#login-button');
   const badge = document.querySelector('#account-badge');
+  const chip = document.querySelector('#account-chip');
+  const avatar = document.querySelector('#account-avatar');
+  const name = document.querySelector('#account-name');
   const user = getCurrentUser();
+  if (!button || !badge || !chip || !avatar || !name) return;
+  button.disabled = false;
   if (usingDemoMode() || user.isDemo) {
+    chip.hidden = true;
     badge.hidden = false;
     badge.textContent = 'デモ';
+    button.hidden = false;
     button.textContent = 'ログイン';
-    button.addEventListener('click', openDemoDialog);
+    button.onclick = openDemoDialog;
+    return;
   }
+  badge.hidden = true;
+  if (user.uid) {
+    chip.hidden = false;
+    name.textContent = user.displayName || '会員';
+    if (user.photoURL) {
+      avatar.hidden = false;
+      avatar.referrerPolicy = 'no-referrer';
+      avatar.src = user.photoURL;
+    } else {
+      avatar.hidden = true;
+      avatar.removeAttribute('src');
+    }
+    button.hidden = false;
+    button.textContent = 'ログアウト';
+    button.onclick = () => {
+      signOutUser();
+    };
+    return;
+  }
+  chip.hidden = true;
+  button.hidden = false;
+  button.textContent = 'ログイン';
+  button.onclick = async () => {
+    button.disabled = true;
+    const result = await signInWithGoogle();
+    button.disabled = false;
+    if (!result.ok && result.reason !== 'cancelled' && result.reason !== 'demo') {
+      openModal({
+        title: 'ログイン',
+        body: authMessage(result.reason),
+        actions: [{ label: 'わかった', className: 'btn btn-primary', onClick: () => closeModal() }],
+      });
+    }
+  };
+}
+
+function bindChrome() {
+  watchAuth(renderAccount);
   document.querySelector('.brand')?.addEventListener('click', () => {
     state.turn = null;
   });
@@ -1321,7 +1373,9 @@ function showFatal() {
 
 async function start() {
   applyCompact();
-  setActiveUser(getCurrentUser().uid);
+  await readyAuth();
+  // 既有單字留在 jvn.local-demo.v1。這個階段不把筆記本改掛到 Google UID。
+  setActiveUser('local-demo');
   await ready();
   bindChrome();
   bindKeys();

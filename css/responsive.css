@@ -102,6 +102,10 @@ html.is-compact .header-actions .btn {
   padding: 0 10px;
 }
 
+html.is-compact .account-chip {
+  max-width: 128px;
+}
+
 html.is-compact .notebook-screen {
   display: flex;
   flex-direction: column;

@@ -178,6 +178,33 @@ svg {
   letter-spacing: 0.08em;
 }
 
+.account-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 220px;
+}
+
+.account-avatar {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--milk);
+}
+
+.account-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .save-warning {
   margin-bottom: 8px;
   padding: 10px 12px;
